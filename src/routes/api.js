@@ -22,26 +22,30 @@ function hashKey(plain) {
   return createHash("sha256").update(plain).digest("hex");
 }
 
-export function requireApiKey(req, res, next) {
-  const key = req.headers["x-api-key"];
-  if (!key) return res.status(401).json({ error: "Missing X-API-Key header" });
-  const row = stmt.findApiKeyByHash.get(hashKey(key));
-  if (!row) return res.status(401).json({ error: "Invalid API key" });
-  req.accountId = row.account_id;
-  next();
+export async function requireApiKey(req, res, next) {
+  try {
+    const key = req.headers["x-api-key"];
+    if (!key) return res.status(401).json({ error: "Missing X-API-Key header" });
+    const row = await stmt.findApiKeyByHash(hashKey(key));
+    if (!row) return res.status(401).json({ error: "Invalid API key" });
+    req.accountId = row.account_id;
+    next();
+  } catch (e) {
+    next(e);
+  }
 }
 
 async function loadFolder(req) {
   const folderId = req.query.folder;
   if (!folderId) throw new HttpError(400, "Missing folder");
-  const row = stmt.getFolder.get(folderId, req.accountId);
+  const row = await stmt.getFolder(folderId, req.accountId);
   if (!row) throw new HttpError(404, "Folder not found");
   return { row, peer: buildPeer(row) };
 }
 
 api.get("/v1/folders", requireApiKey, async (req, res, next) => {
   try {
-    res.json({ folders: stmt.foldersFor.all(req.accountId).map((f) => ({ id: f.id, title: f.title, kind: f.kind })) });
+    res.json({ folders: (await stmt.foldersFor(req.accountId)).map((f) => ({ id: f.id, title: f.title, kind: f.kind })) });
   } catch (e) {
     next(e);
   }
@@ -122,17 +126,17 @@ api.delete("/v1/files", requireApiKey, async (req, res, next) => {
 });
 
 /* ---- key management (admin only) ---- */
-keys.get("/keys", requireAppAuth, requireAdmin, (req, res) => {
-  res.json({ keys: stmt.listApiKeys.all() });
+keys.get("/keys", requireAppAuth, requireAdmin, async (req, res) => {
+  res.json({ keys: await stmt.listApiKeys() });
 });
 
-keys.post("/keys", requireAppAuth, requireAdmin, (req, res) => {
+keys.post("/keys", requireAppAuth, requireAdmin, async (req, res) => {
   const { label, account } = req.body || {};
   if (!account) return res.status(400).json({ error: "account required (account to bind this key to)" });
-  if (!stmt.getAccount.get(account)) return res.status(404).json({ error: "Account not found" });
+  if (!(await stmt.getAccount(account))) return res.status(404).json({ error: "Account not found" });
   const id = uid();
   const plain = "tdk_" + token(20);
-  stmt.addApiKey.run({
+  await stmt.addApiKey({
     id,
     token_hash: hashKey(plain),
     label: String(label || "API key"),
@@ -142,7 +146,7 @@ keys.post("/keys", requireAppAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, id, key: plain, label: label || "API key", accountId: account });
 });
 
-keys.delete("/keys/:id", requireAppAuth, requireAdmin, (req, res) => {
-  stmt.deleteApiKey.run(req.params.id);
+keys.delete("/keys/:id", requireAppAuth, requireAdmin, async (req, res) => {
+  await stmt.deleteApiKey(req.params.id);
   res.json({ ok: true });
 });

@@ -45,8 +45,8 @@ function sliceToFile(src, start, size, dst) {
 }
 
 // Load a multipart row owned by this account or 404.
-function loadOwnedMultipart(req) {
-  const mp = stmt.getMultipart.get(req.params.id);
+async function loadOwnedMultipart(req) {
+  const mp = await stmt.getMultipart(req.params.id);
   if (!mp || mp.account_id !== req.accountId) throw new HttpError(404, "File not found");
   return mp;
 }
@@ -54,7 +54,7 @@ function loadOwnedMultipart(req) {
 async function loadFolder(req) {
   const folderId = req.query.folder || req.headers["x-folder"];
   if (!folderId) throw new HttpError(400, "Missing folder");
-  const row = stmt.getFolder.get(folderId, req.accountId);
+  const row = await stmt.getFolder(folderId, req.accountId);
   if (!row) throw new HttpError(404, "Folder not found");
   return { row, peer: buildPeer(row) };
 }
@@ -72,7 +72,7 @@ files.get("/files", requireAppAuth, requireAccount, async (req, res, next) => {
 
     // Merge multipart (split) files: always hide their underlying parts, and on
     // the first page also surface one virtual entry per logical file.
-    const mps = stmt.listMultipart.all(req.accountId, row.peer_json);
+    const mps = await stmt.listMultipart(req.accountId, row.peer_json);
     if (mps.length) {
       const partIds = new Set();
       for (const mp of mps) for (const p of parseParts(mp)) partIds.add(Number(p.msgId));
@@ -167,7 +167,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
       // (and hidden from the file list) from the very first one — split parts
       // must never appear as separate files, even if the upload is interrupted.
       const mpId = "mp_" + uid();
-      stmt.addMultipart.run({
+      await stmt.addMultipart({
         id: mpId,
         account_id: req.accountId,
         peer_json: row.peer_json,
@@ -214,7 +214,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
           parts.push({ msgId, size: thisSize });
           // Persist each part as it lands, so the record always matches what's
           // safely in Telegram (and the list hides those messages immediately).
-          stmt.updateMultipartParts.run({ id: mpId, parts_json: JSON.stringify(parts) });
+          await stmt.updateMultipartParts({ id: mpId, parts_json: JSON.stringify(parts) });
           uploadedSoFar += thisSize;
           offset += thisSize;
           partIndex++;
@@ -225,12 +225,12 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
         if (sentIds.length) {
           try { await deleteFiles(client, peer, sentIds); } catch {}
         }
-        stmt.deleteMultipart.run(mpId);
-        stmt.deleteSharesByMultipart.run(mpId);
+        await stmt.deleteMultipart(mpId);
+        await stmt.deleteSharesByMultipart(mpId);
         throw splitErr;
       }
       fs.rm(upDir, { recursive: true, force: true }, () => {});
-      const file = serializeMultipart(stmt.getMultipart.get(mpId));
+      const file = serializeMultipart(await stmt.getMultipart(mpId));
       if (job) finish(job, { id: file?.id, name: file?.name });
       return res.json({ ok: true, file });
     }
@@ -269,7 +269,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
 files.get("/files/:id", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) {
-      return res.json({ file: serializeMultipart(loadOwnedMultipart(req)) });
+      return res.json({ file: serializeMultipart(await loadOwnedMultipart(req)) });
     }
     const { peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
@@ -283,7 +283,7 @@ files.get("/files/:id", requireAppAuth, requireAccount, async (req, res, next) =
 files.get("/files/:id/raw", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) {
-      const mp = loadOwnedMultipart(req);
+      const mp = await loadOwnedMultipart(req);
       const client = await getConnectedClient(req.accountId);
       const peer = buildPeer({ peer_json: mp.peer_json });
       return await streamMultipart(client, peer, parseParts(mp), Number(mp.size), req, res, {
@@ -304,7 +304,7 @@ files.get("/files/:id/raw", requireAppAuth, requireAccount, async (req, res, nex
 files.get("/files/:id/download", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) {
-      const mp = loadOwnedMultipart(req);
+      const mp = await loadOwnedMultipart(req);
       const client = await getConnectedClient(req.accountId);
       const peer = buildPeer({ peer_json: mp.peer_json });
       return await streamMultipart(client, peer, parseParts(mp), Number(mp.size), req, res, {
@@ -338,9 +338,9 @@ files.get("/files/:id/thumb", requireAppAuth, requireAccount, async (req, res, n
 files.patch("/files/:id", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) {
-      const mp = loadOwnedMultipart(req);
+      const mp = await loadOwnedMultipart(req);
       const name = String(req.body?.name ?? req.body?.caption ?? (mp.name || "")).trim();
-      if (name) stmt.renameMultipart.run({ id: req.params.id, name: safeFilename(name) || mp.name });
+      if (name) await stmt.renameMultipart({ id: req.params.id, name: safeFilename(name) || mp.name });
       return res.json({ ok: true });
     }
     const { peer } = await loadFolder(req);
@@ -371,7 +371,7 @@ files.delete("/files", requireAppAuth, requireAccount, async (req, res, next) =>
     }
 
     for (const mpId of mpIds) {
-      const mp = stmt.getMultipart.get(mpId);
+      const mp = await stmt.getMultipart(mpId);
       if (!mp || mp.account_id !== req.accountId) continue;
       const partIds = parseParts(mp).map((p) => p.msgId).filter(Boolean);
       if (partIds.length) {
@@ -379,8 +379,8 @@ files.delete("/files", requireAppAuth, requireAccount, async (req, res, next) =>
           await deleteFiles(client, peer, partIds);
         } catch {}
       }
-      stmt.deleteMultipart.run(mpId);
-      stmt.deleteSharesByMultipart.run(mpId);
+      await stmt.deleteMultipart(mpId);
+      await stmt.deleteSharesByMultipart(mpId);
       deleted++;
     }
 

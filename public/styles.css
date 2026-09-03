@@ -192,6 +192,12 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
 .nav-item:hover { background: var(--bg-3); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-more {
+  flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--muted); background: transparent; border: none; opacity: 0; transition: 0.12s;
+}
+.nav-item:hover .nav-more, .nav-item.active .nav-more { opacity: 1; }
+.nav-more:hover { background: var(--bg-2, rgba(0,0,0,0.08)); color: var(--text); }
 .nav-muted { color: var(--muted-2); font-size: 12px; padding: 4px 11px; }
 .theme-row { display: flex; gap: 6px; padding: 0 10px 6px; }
 .seg { flex: 1; justify-content: center; padding: 7px; border-radius: 8px; font-size: 12.5px; }
@@ -645,6 +651,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .modal { border-radius: var(--radius); box-shadow: var(--shadow-lg); border: none; }
 .modal .head { padding: 16px 20px; }
 .gd-dialog { max-width: 420px; }
+.gd-dialog.wide { max-width: 480px; }
+.gd-check-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13.5px; cursor: pointer; user-select: none; border-bottom: 1px solid var(--border); }
+.gd-check-row:last-child { border-bottom: none; }
+.gd-check-row input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
 .gd-dialog-body { padding: 24px; }
 .gd-dlg-ic { width: 44px; height: 44px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: 14px; }
 .gd-dlg-ic.err-ic { background: rgba(240,85,106,0.12); color: var(--danger); }

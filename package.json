@@ -35,12 +35,12 @@
   },
   "dependencies": {
     "archiver": "^7.0.1",
-    "better-sqlite3": "^11.9.1",
     "compression": "^1.7.5",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mime-types": "^2.1.35",
+    "pg": "^8.23.0",
     "sharp": "^0.35.3",
     "telegram": "^2.26.0"
   }

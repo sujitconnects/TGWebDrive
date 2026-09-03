@@ -132,12 +132,14 @@ All settings are optional except `SECRET`. Copy `.env.example` to `.env` and edi
 | `MAX_UPLOAD_BYTES` | `2147483648` | Max upload size (2 GB; Telegram's per-file cap) |
 | `SPLIT_PART_BYTES` | `~2040109465` | Files larger than this are auto-split into multipart entries that reassemble on download. Defaults to ~1.9 GiB for a safe margin under Telegram's 2 GiB cap. |
 | `API_PRESETS` | — | Optional `api_id:api_hash,api_id:api_hash` presets shown on the login screen |
+| `DATABASE_URL` | — | **Required.** Postgres connection string, e.g. `postgres://user:pass@host:5432/tgdrive` |
+| `DATABASE_SSL` | `false` | Set `true` for managed Postgres providers that require SSL |
 
 ---
 
 ## Tech stack
 
-- **Backend:** Node.js, Express 4, better-sqlite3, GramJS (`telegram`)
+- **Backend:** Node.js, Express 4, Postgres (`pg`), GramJS (`telegram`)
 - **Frontend:** Vanilla JS SPA — no framework, no bundler
 - **Imaging:** `sharp` for thumbnails
 - **Archiving:** `archiver` for folder ZIP downloads
@@ -149,10 +151,10 @@ All settings are optional except `SECRET`. Copy `.env.example` to `.env` and edi
 ```
 Browser  ──▶  TGWebDrive (Express)  ──▶  Telegram API (GramJS)
                    │
-                   └─ better-sqlite3 (metadata, users, shares, API keys)
+                   └─ Postgres (metadata, users, shares, API keys)
 ```
 
-Files are never stored on your server's disk — the app streams them straight between the browser and Telegram. Your server only keeps lightweight metadata (filenames, sizes, share links, users) in SQLite.
+Files are never stored on your server's disk — the app streams them straight between the browser and Telegram. Your server only keeps lightweight metadata (filenames, sizes, share links, users) in Postgres.
 
 ---
 

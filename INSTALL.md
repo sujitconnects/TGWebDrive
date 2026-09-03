@@ -42,7 +42,7 @@ cd TGWebDrive
 npm install
 ```
 
-> `npm install` will compile `better-sqlite3` and `sharp`, so it needs `build-essential` / `python3` available.
+> `npm install` will compile `sharp`, so it needs `build-essential` / `python3` available.
 
 ---
 
@@ -66,6 +66,18 @@ PUBLIC_URL=https://drive.example.com
 
 # Optional: pre-fill the api_id:api_hash presets on the login screen
 API_PRESETS=
+
+# Required: Postgres connection string. All accounts, folders, shares, API
+# keys and sessions live here — nothing is re-fetched from Telegram
+# automatically, so this is the single source of truth for your data.
+DATABASE_URL=postgres://user:password@host:5432/tgdrive
+# Set to true if your provider requires SSL with a self-signed cert (most
+# managed Postgres hosts — Railway, Render, Supabase, Neon, RDS — do).
+DATABASE_SSL=true
+
+# Optional: point uploads/thumbnails/branding assets at a persistent
+# volume/path. Defaults to ./data next to the app.
+DATA_DIR=
 ```
 
 Then generate a strong secret:
@@ -74,6 +86,17 @@ Then generate a strong secret:
 openssl rand -hex 32
 # paste the output as SECRET in .env
 ```
+
+Create the database once (any Postgres 13+ works — a managed instance or your own):
+
+```bash
+createdb tgdrive
+# or: psql -c "CREATE DATABASE tgdrive"
+```
+
+The app creates its own tables on first start — no manual migration needed.
+
+> **Important — don't lose your data on redeploy:** every folder/channel you create and your logged-in Telegram session live in the Postgres database pointed to by `DATABASE_URL`. As long as that database is a real, persistent Postgres instance (not a local file), your data survives rebuilds/redeploys even on platforms that give you a fresh, ephemeral filesystem each time (Docker, Nixpacks-based PaaS, Kubernetes, etc.). If you previously ran an older version of TGWebDrive backed by SQLite and lost data to an ephemeral filesystem, log in again and use **New → Import existing channel** to reattach the channels Telegram still has — they aren't deleted, just no longer linked in the app.
 
 ---
 
@@ -225,10 +248,10 @@ pm2 restart tgdrive
 
 ## 9. Backups
 
-The only stateful thing on the server is the SQLite database in `data/`. Back it up regularly:
+The only stateful things are the Postgres database (set via `DATABASE_URL`) and the `data/` folder (uploads-in-progress, thumbnails, branding logo). Back up Postgres with your provider's tooling, or manually:
 
 ```bash
-sqlite3 data/tgdrive.sqlite ".backup '/backups/tgdrive-$(date +%F).sqlite'"
+pg_dump "$DATABASE_URL" > /backups/tgdrive-$(date +%F).sql
 ```
 
 Files themselves are in your Telegram account, so they're as safe as your Telegram account is.
@@ -239,7 +262,7 @@ Files themselves are in your Telegram account, so they're as safe as your Telegr
 
 | Symptom | Fix |
 |---|---|
-| **`better-sqlite3` build fails** | Install build tools: `sudo apt install build-essential python3` (Debian) or `sudo dnf groupinstall "Development Tools" python3` (RHEL) |
+| **`better-sqlite3` build fails** | This shouldn't happen — the app uses Postgres (`pg`), which has no native build step |
 | **Login code never arrives** | Use the Telegram app to check your login attempts; retry. Make sure `api_id`/`api_hash` are correct. |
 | **Upload fails at ~2 GB** | That's Telegram's per-file limit. Use a Premium account for ~4 GB, or split the file. |
 | **Share link shows 404** | Ensure `PUBLIC_URL` in `.env` matches your real public URL, and the proxy forwards `X-Forwarded-Proto`. |

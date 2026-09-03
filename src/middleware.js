@@ -7,9 +7,9 @@ const TTL_REMEMBER = 1000 * 60 * 60 * 24 * 90; // 90 days
 const TTL_SESSION = 1000 * 60 * 60 * 24 * 1; // 1 day
 
 // Purge expired sessions occasionally.
-function gc() {
+async function gc() {
   try {
-    stmt.deleteExpiredSessions.run(Date.now());
+    await stmt.deleteExpiredSessions(Date.now());
   } catch {}
 }
 setInterval(gc, 60 * 60 * 1000).unref();
@@ -19,11 +19,11 @@ function cookieSecure(req) {
   return !!(req.secure || req.protocol === "https" || req.headers["x-forwarded-proto"] === "https");
 }
 
-export function createSession(req, res, user, { remember = false } = {}) {
+export async function createSession(req, res, user, { remember = false } = {}) {
   const sid = token(24);
   const now = Date.now();
   const ttl = remember ? TTL_REMEMBER : TTL_SESSION;
-  stmt.addSession.run({
+  await stmt.addSession({
     sid,
     user_id: user.id,
     username: user.username,
@@ -46,13 +46,13 @@ export function setCookie(req, res, sid, ttlMs = TTL_SESSION) {
   });
 }
 
-export function getSession(req) {
+export async function getSession(req) {
   const sid = req.cookies?.sid;
   if (!sid) return null;
-  const row = stmt.getSession.get(sid);
+  const row = await stmt.getSession(sid);
   if (!row) return null;
   if (row.expires_at < Date.now()) {
-    stmt.deleteSession.run(sid);
+    await stmt.deleteSession(sid);
     return null;
   }
   return {
@@ -65,30 +65,30 @@ export function getSession(req) {
   };
 }
 
-export function updateSession(req, patch) {
+export async function updateSession(req, patch) {
   const sid = req.cookies?.sid;
   if (!sid) return;
   if (patch && Object.prototype.hasOwnProperty.call(patch, "currentAccountId")) {
-    stmt.updateSessionRow.run({ sid, current_account_id: patch.currentAccountId ?? null });
+    await stmt.updateSessionRow({ sid, current_account_id: patch.currentAccountId ?? null });
   }
 }
 
-export function destroySession(req, res) {
+export async function destroySession(req, res) {
   const sid = req.cookies?.sid;
-  if (sid) stmt.deleteSession.run(sid);
+  if (sid) await stmt.deleteSession(sid);
   res.clearCookie("sid", { path: "/" });
 }
 
-export function destroyUserSessions(userId) {
-  stmt.deleteSessionsByUser.run(userId);
+export async function destroyUserSessions(userId) {
+  await stmt.deleteSessionsByUser(userId);
 }
 
-export function isSetup() {
-  return stmt.countUsers.get().c > 0;
+export async function isSetup() {
+  return (await stmt.countUsers()).c > 0;
 }
 
 export async function requireAppAuth(req, res, next) {
-  const s = getSession(req);
+  const s = await getSession(req);
   if (!s) return res.status(401).json({ error: "Not authenticated", needsLogin: true });
   req.session = s;
   req.user = { id: s.userId, username: s.username, role: s.role };

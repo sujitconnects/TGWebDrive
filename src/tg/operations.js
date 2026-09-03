@@ -426,6 +426,25 @@ export async function createChannelFolder(client, title) {
   };
 }
 
+export async function renameChannelFolder(client, peer, title) {
+  if (!(peer instanceof Api.InputPeerChannel)) throw new HttpError(400, "This folder can't be renamed");
+  await client.invoke(
+    new Api.channels.EditTitle({
+      channel: new Api.InputChannel({ channelId: peer.channelId, accessHash: peer.accessHash }),
+      title: title.slice(0, 255),
+    })
+  );
+}
+
+export async function deleteChannelFolder(client, peer) {
+  if (!(peer instanceof Api.InputPeerChannel)) return; // e.g. "saved" folders have no channel to remove
+  await client.invoke(
+    new Api.channels.DeleteChannel({
+      channel: new Api.InputChannel({ channelId: peer.channelId, accessHash: peer.accessHash }),
+    })
+  );
+}
+
 function extractCreatedChat(updates) {
   const chats = updates?.chats || updates?.updates?.flatMap?.((u) => u?.chats || []) || [];
   for (const c of chats) {
@@ -433,6 +452,7 @@ function extractCreatedChat(updates) {
   }
   return chats[0] || null;
 }
+
 
 export async function listDialogs(client) {
   const res = await client.invoke(new Api.messages.GetDialogs({ offsetPeer: new Api.InputPeerEmpty(), limit: 100, hash: 0n }));

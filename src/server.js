@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import fs from "node:fs";
 import { config, PUBLIC_DIR } from "./config.js";
+import { initDb } from "./db.js";
 import { HttpError } from "./tg/manager.js";
 import { auth } from "./routes/auth.js";
 import { folders } from "./routes/folders.js";
@@ -12,6 +13,8 @@ import { share, pubBin } from "./routes/share.js";
 import { stats } from "./routes/stats.js";
 import { api, keys } from "./routes/api.js";
 import { branding } from "./routes/branding.js";
+
+await initDb();
 
 const app = express();
 app.set("trust proxy", 1);

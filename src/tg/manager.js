@@ -30,7 +30,7 @@ export async function getConnectedClient(accountId) {
       clients.delete(accountId);
     }
   }
-  const acc = stmt.getAccount.get(accountId);
+  const acc = await stmt.getAccount(accountId);
   if (!acc) throw new HttpError(404, "Account not found");
   const client = buildSession(acc.session, acc.api_id, acc.api_hash);
   await connect(client);
@@ -44,7 +44,7 @@ export async function getConnectedClient(accountId) {
   if (!ok) throw new HttpError(401, "Telegram session expired — please log in again");
   entry = { client, lastUsed: Date.now() };
   clients.set(accountId, entry);
-  stmt.touchAccount.run(Date.now(), accountId);
+  await stmt.touchAccount(Date.now(), accountId);
   return client;
 }
 
@@ -128,7 +128,7 @@ export async function finishLogin(tempToken, code, password) {
     const sessionStr = client.session.save();
     const id = uid();
     const now = Date.now();
-    stmt.addAccount.run({
+    await stmt.addAccount({
       id,
       label: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || phone || "Account",
       phone,
@@ -143,7 +143,7 @@ export async function finishLogin(tempToken, code, password) {
     });
     clients.set(id, { client, lastUsed: now });
     logins.delete(tempToken);
-    return { id, me: { name: stmt.getAccount.get(id).label, username: me.username || null, phone, premium: !!me.premium } };
+    return { id, me: { name: (await stmt.getAccount(id)).label, username: me.username || null, phone, premium: !!me.premium } };
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw mapTgError(e);

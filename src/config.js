@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, "..");
-export const DATA_DIR = path.join(ROOT, "data");
+// Allow pointing at a mounted persistent volume so the DB/session survive rebuilds & redeploys.
+export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
 export const PUBLIC_DIR = path.join(ROOT, "public");
 export const UPLOAD_TMP = path.join(DATA_DIR, "uploads");
 
@@ -55,4 +56,10 @@ export const config = {
       return { id: id.trim(), hash: hash.trim() };
     }),
   isProd: process.env.NODE_ENV === "production",
+  databaseUrl: process.env.DATABASE_URL,
+  databaseSsl: process.env.DATABASE_SSL === "true",
 };
+
+if (!config.databaseUrl) {
+  throw new Error("DATABASE_URL is required (Postgres connection string) — set it in .env");
+}

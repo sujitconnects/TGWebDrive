@@ -21,10 +21,10 @@ const DEFAULTS = {
 const ALLOWED_LOGO = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"]);
 const MAX_LOGO = 2 * 1024 * 1024;
 
-function readBranding() {
+async function readBranding() {
   let parsed = {};
   try {
-    parsed = JSON.parse(metaGet(KEY, "{}") || "{}");
+    parsed = JSON.parse((await metaGet(KEY, "{}")) || "{}");
   } catch {
     parsed = {};
   }
@@ -39,8 +39,8 @@ function logoVersion() {
   }
 }
 
-function publicBranding() {
-  const b = readBranding();
+async function publicBranding() {
+  const b = await readBranding();
   const hasLogo = fs.existsSync(LOGO_FILE);
   return {
     name: b.name,
@@ -52,13 +52,13 @@ function publicBranding() {
 }
 
 // public — used by the SPA and the (unauthenticated) share page
-branding.get("/branding", (req, res) => {
-  res.json(publicBranding());
+branding.get("/branding", async (req, res) => {
+  res.json(await publicBranding());
 });
 
-branding.get("/branding/logo", (req, res) => {
+branding.get("/branding/logo", async (req, res) => {
   if (!fs.existsSync(LOGO_FILE)) return res.status(404).end();
-  const mime = metaGet(LOGO_MIME_KEY, "image/png");
+  const mime = await metaGet(LOGO_MIME_KEY, "image/png");
   res.setHeader("Content-Type", mime);
   res.setHeader("Cache-Control", "public, max-age=300");
   fs.createReadStream(LOGO_FILE).pipe(res);
@@ -76,17 +76,17 @@ function clean(s, max) {
   return String(s == null ? "" : s).replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 }
 
-branding.put("/branding", requireAppAuth, requireAdmin, (req, res) => {
+branding.put("/branding", requireAppAuth, requireAdmin, async (req, res) => {
   const body = req.body || {};
   const accent = normalizeHex(body.accent) || DEFAULTS.accent;
   const name = clean(body.name, 40) || DEFAULTS.name;
   const tagline = clean(body.tagline, 80);
   const copyright = clean(body.copyright, 80);
-  metaSet(KEY, JSON.stringify({ name, accent, tagline, copyright }));
-  res.json({ ok: true, branding: publicBranding() });
+  await metaSet(KEY, JSON.stringify({ name, accent, tagline, copyright }));
+  res.json({ ok: true, branding: await publicBranding() });
 });
 
-branding.post("/branding/logo", requireAppAuth, requireAdmin, raw({ type: "image/*", limit: "2mb" }), (req, res, next) => {
+branding.post("/branding/logo", requireAppAuth, requireAdmin, raw({ type: "image/*", limit: "2mb" }), async (req, res, next) => {
   const mime = (req.get("content-type") || "").split(";")[0].trim().toLowerCase();
   if (!ALLOWED_LOGO.has(mime)) return res.status(400).json({ error: "Logo must be a PNG, JPEG, WebP, GIF, SVG or ICO image" });
   const buf = req.body;
@@ -94,7 +94,7 @@ branding.post("/branding/logo", requireAppAuth, requireAdmin, raw({ type: "image
   if (buf.length > MAX_LOGO) return res.status(413).json({ error: "Logo too large (max 2 MB)" });
   try {
     fs.writeFileSync(LOGO_FILE, buf);
-    metaSet(LOGO_MIME_KEY, mime);
+    await metaSet(LOGO_MIME_KEY, mime);
     res.json({ ok: true, logo: `/api/branding/logo?v=${logoVersion()}` });
   } catch (e) {
     next(e);

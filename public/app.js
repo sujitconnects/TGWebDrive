@@ -250,6 +250,8 @@ const state = {
   offsetId: 0,
   loading: false,
   sidebarOpen: false,
+  sortBy: localStorage.getItem("tg.sortBy") || "date",
+  sortDir: localStorage.getItem("tg.sortDir") || "desc",
 };
 
 function theme(t) {
@@ -499,11 +501,57 @@ function openNewMenu(anchor) {
   const inFolder = !!state.currentFolder;
   openMenu(anchor, [
     { icon: icon("folderPlus", { size: 18 }), label: state.currentFolder ? "New subfolder" : "New folder", onClick: () => newFolder(state.currentFolder) },
+    { icon: icon("hardDriveDownload", { size: 18 }), label: "Import existing channel", onClick: () => importChannelsModal() },
     { divider: true },
     { icon: icon("uploadCloud", { size: 18 }), label: "Upload files", onClick: () => (inFolder ? pickUpload() : toast("Open a folder first")) },
     { icon: icon("hardDriveDownload", { size: 18 }), label: "Upload folder", onClick: () => (inFolder ? pickUploadFolder() : toast("Open a folder first")) },
   ]);
 }
+
+/* Recover folders whose Telegram channels still exist but whose local DB record
+   was lost (e.g. redeploy without a persistent data/ volume). */
+async function importChannelsModal() {
+  const card = el(`<div class="modal card-modal gd-dialog wide">
+    <div class="head"><div class="t">${icon("hardDriveDownload", { size: 16 })} Import existing channel</div><button type="button" class="icon-btn" id="icClose">${icon("x", { size: 18 })}</button></div>
+    <div class="gd-dialog-body"><div class="gd-dlg-msg">Reattach a Telegram channel you already used as a drive folder (useful if folders vanished after a redeploy).</div><div id="icBody" class="center-load"><div class="spinner"></div></div></div>
+  </div>`);
+  const bg = modalOverlay(card);
+  card.querySelector("#icClose").onclick = () => bg._close();
+  const body = card.querySelector("#icBody");
+  try {
+    const { chats } = await api("/api/chats");
+    const known = new Set(state.folders.map((f) => f.title));
+    const importable = (chats || []).filter((c) => c.type === "channel");
+    if (!importable.length) {
+      body.innerHTML = `<div class="nav-muted">No channels found on this account.</div>`;
+      return;
+    }
+    body.innerHTML = importable
+      .map(
+        (c, i) =>
+          `<label class="gd-check-row"><input type="checkbox" data-i="${i}" ${known.has(c.title) ? "" : "checked"}/> <span>${esc(c.title)}${c.username ? ` <span class="nav-muted">@${esc(c.username)}</span>` : ""}${known.has(c.title) ? ` <span class="nav-muted">(already have a folder with this name)</span>` : ""}</span></label>`
+      )
+      .join("");
+    const actions = el(`<div class="gd-dialog-actions"><button type="button" class="btn-2 ghost" id="icCancel">Cancel</button><button class="primary" id="icGo">${icon("check", { size: 15 })} Import selected</button></div>`);
+    card.appendChild(actions);
+    actions.querySelector("#icCancel").onclick = () => bg._close();
+    actions.querySelector("#icGo").onclick = async () => {
+      const picks = [...body.querySelectorAll("input:checked")].map((el) => importable[Number(el.dataset.i)]);
+      if (!picks.length) return bg._close();
+      for (const c of picks) {
+        try {
+          await api("/api/folders/import", { method: "POST", body: JSON.stringify({ channelId: c.id, accessHash: c.accessHash, title: c.title }) });
+        } catch {}
+      }
+      bg._close();
+      await refreshFolders();
+      toast(`Imported ${picks.length} folder${picks.length > 1 ? "s" : ""}`);
+    };
+  } catch (err) {
+    body.innerHTML = `<div class="nav-muted">${esc(err.message)}</div>`;
+  }
+}
+window.importChannelsModal = importChannelsModal;
 function openAvatarMenu(anchor) {
   openMenu(
     anchor,
@@ -527,8 +575,9 @@ function renderSidebar() {
     .map((f) => {
       const active = state.currentFolder === f.id;
       const ic = f.kind === "saved" ? "inbox" : "folder";
+      const more = f.kind === "saved" ? "" : `<button class="nav-more" data-more="${f.id}" title="Folder options">${icon("moreH", { size: 15 })}</button>`;
       return `<div class="nav-item ${active ? "active" : ""}" data-folder="${f.id}" title="${esc(f.title)}">
-        ${icon(ic, { size: 18 })}<span class="nm">${esc(f.title)}</span>${active ? icon("check", { size: 14, cls: "ml" }) : ""}</div>`;
+        ${icon(ic, { size: 18 })}<span class="nm">${esc(f.title)}</span>${active ? icon("check", { size: 14, cls: "ml" }) : ""}${more}</div>`;
     })
     .join("");
   const libItem = (v, label, ic) => `<div class="nav-item ${state.currentView === v ? "active" : ""}" data-view="${v}">${icon(ic, { size: 18 })}<span class="nm">${label}</span></div>`;
@@ -543,6 +592,15 @@ function renderSidebar() {
     ${libItem("settings", "Settings", "settings")}`;
   $$(".nav-item[data-folder]", nav).forEach((n) => (n.onclick = () => openFolder(n.dataset.folder)));
   $$(".nav-item[data-view]", nav).forEach((n) => (n.onclick = () => openView(n.dataset.view)));
+  $$(".nav-more", nav).forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openMenu(btn, [
+        { icon: icon("pencil", { size: 16 }), label: "Rename", onClick: () => renameFolder(btn.dataset.more) },
+        { icon: icon("trash", { size: 16 }), label: "Delete", danger: true, onClick: () => deleteFolder(btn.dataset.more) },
+      ]);
+    };
+  });
 }
 theme.current = localStorage.getItem("tg.theme") || "light";
 window.setTheme = (t) => {
@@ -571,6 +629,7 @@ async function openFolder(id) {
   toggleSidebar(false);
   const f = state.folders.find((x) => x.id === id);
   $("#search").value = "";
+  $("#search").placeholder = `Search in ${f?.title || "folder"}…`;
   state.search = "";
   renderSidebar();
   // breadcrumb
@@ -585,7 +644,9 @@ async function openFolder(id) {
       })
       .join(`<span class="crumb-sep">${icon("chevronRight", { size: 13 })}</span>`) || `${icon("folder", { size: 18 })} Drive`;
   $("#topActions").innerHTML = `
+    ${f && !f.isSaved ? `<button class="icon-btn" id="renameFolderBtn" title="Rename folder">${icon("pencil")}</button><button class="icon-btn" id="deleteFolderBtn" title="Delete folder">${icon("trash")}</button>` : ""}
     <button class="icon-btn" id="shareFolderBtn" title="Share whole folder">${icon("share")}</button>
+    <button class="icon-btn" id="sortBtn" title="Sort">${icon("arrowUpDown", { size: 18 })}</button>
     <button class="icon-btn" id="viewToggle" title="Toggle view">${icon(state.view === "grid" ? "list" : "grid")}</button>`;
   $("#viewToggle").onclick = () => {
     state.view = state.view === "grid" ? "list" : "grid";
@@ -594,6 +655,11 @@ async function openFolder(id) {
     renderFiles();
   };
   $("#shareFolderBtn").onclick = () => shareFolderModal(f);
+  $("#sortBtn").onclick = (e) => openSortMenu(e.currentTarget);
+  if (f && !f.isSaved) {
+    $("#renameFolderBtn").onclick = () => renameFolder(f.id);
+    $("#deleteFolderBtn").onclick = () => deleteFolder(f.id);
+  }
   await loadFiles(true);
 }
 
@@ -613,6 +679,7 @@ async function loadFiles(reset) {
     const r = await api(`/api/files?folder=${state.currentFolder}&limit=60${state.offsetId ? `&offsetId=${state.offsetId}` : ""}${state.search ? `&search=${encodeURIComponent(state.search)}` : ""}`);
     state.files = reset ? r.items : [...state.files, ...r.items];
     state.offsetId = r.nextOffset;
+    sortFiles();
     renderFiles();
   } catch (err) {
     content().innerHTML = emptyHtml(err.message, "alert");
@@ -621,12 +688,56 @@ async function loadFiles(reset) {
   }
 }
 
+const SORT_OPTIONS = {
+  date: { label: "Date", get: (f) => Number(f.date) || 0 },
+  name: { label: "Name", get: (f) => (f.caption || f.name || "").toLowerCase() },
+  size: { label: "Size", get: (f) => Number(f.size) || 0 },
+  type: { label: "Type", get: (f) => f.ext || f.kind || "" },
+};
+function sortFiles() {
+  const { get } = SORT_OPTIONS[state.sortBy] || SORT_OPTIONS.date;
+  const dir = state.sortDir === "asc" ? 1 : -1;
+  state.files.sort((a, b) => {
+    const av = get(a),
+      bv = get(b);
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+}
+function setSort(by, dir) {
+  state.sortBy = by;
+  state.sortDir = dir;
+  localStorage.setItem("tg.sortBy", by);
+  localStorage.setItem("tg.sortDir", dir);
+  sortFiles();
+  renderFiles();
+}
+window.setSort = setSort;
+function openSortMenu(anchor) {
+  const items = [];
+  for (const [key, { label }] of Object.entries(SORT_OPTIONS)) {
+    for (const [dir, dirLabel] of [["asc", "Asc"], ["desc", "Desc"]]) {
+      const active = state.sortBy === key && state.sortDir === dir;
+      items.push({
+        icon: active ? icon("check", { size: 15 }) : `<span style="display:inline-block;width:15px"></span>`,
+        label: `${label} (${dirLabel})`,
+        onClick: () => setSort(key, dir),
+      });
+    }
+  }
+  openMenu(anchor, items);
+}
+window.openSortMenu = openSortMenu;
+
 function renderSubfolders() {
   renderFiles();
 }
 function folderCard(f) {
   return `<div class="card folder-card" data-folder="${f.id}" title="${esc(f.title)}">
-    <div class="card-actions"><button class="ca-btn danger" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${f.id}')">${icon("trash", { size: 15 })}</button></div>
+    <div class="card-actions">
+      ${f.isSaved ? "" : `<button class="ca-btn" title="Rename folder" onclick="event.stopPropagation();renameFolder('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn danger" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${f.id}')">${icon("trash", { size: 15 })}</button>`}
+    </div>
     <div class="fcard-ic">${icon(f.kind === "saved" ? "inbox" : "folder", { size: 40 })}</div>
     <div class="meta"><div class="nm" title="${esc(f.title)}">${esc(f.title)}</div><div class="sz">Folder</div></div>
   </div>`;
@@ -659,7 +770,7 @@ function renderFiles() {
   }</div>`;
   const partBadge = (f) => (f.multipart ? `<span class="mp-badge" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 11 })} ${f.partsCount}</span>` : "");
   const rowActions = (id) =>
-    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
+    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
   const list =
     state.view === "grid"
       ? `<div class="grid">${state.files.map(fileCard).join("")}</div>`
@@ -695,7 +806,7 @@ function fileCard(f) {
   const thumb = `${fileIcon(f.kind, 40)}${showImg ? `<img class="thumb-img" loading="lazy" src="/api/files/${f.id}/thumb?folder=${state.currentFolder}" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()" alt="" />` : ""}`;
   const badge = f.kind === "video" ? `<span class="play-badge">${icon("play", { size: 12 })}</span>` : "";
   const mpTag = f.multipart ? `<span class="mp-tag" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 12 })} ${f.partsCount} parts</span>` : "";
-  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
+  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
   return `<div class="card ${sel}" data-id="${f.id}">
     <div class="card-sel">${icon("check", { size: 13 })}</div>
     ${actions}
@@ -794,9 +905,7 @@ function previewFile(id) {
   if (!body)
     body = `<div class="no-prev">${fileIcon(f.multipart ? "archive" : f.kind, 56)}<div class="np-msg">${f.multipart ? `Split file · ${f.partsCount} parts` : "No preview available"}</div><div class="np-hint" style="color:var(--muted);font-size:12px;margin-bottom:12px">Downloads reassemble all parts into one file.</div><button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 16 })} Download</button></div>`;
   window.__pf = f;
-  const capBtn = f.multipart
-    ? `<button class="btn-2" onclick="renameModal(window.__pf)">${icon("pencil", { size: 15 })} Rename</button>`
-    : `<button class="btn-2" onclick="renameModal(window.__pf)">${icon("pencil", { size: 15 })} Caption</button>`;
+  const capBtn = `<button class="btn-2" onclick="renameModal(window.__pf)">${icon("pencil", { size: 15 })} Rename</button>`;
   const modal = el(`<div class="modal-bg" id="pmodal">
     <div class="modal wide">
       <div class="head"><div class="t">${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}</div>
@@ -822,11 +931,12 @@ window.downloadFile = downloadFile;
 function renameModal(f) {
   $("#pmodal")?.remove();
   const isMp = !!f.multipart;
+  const current = isMp ? f.name : f.caption || f.name || "";
   const modal = el(`<div class="modal-bg"><form class="modal card-modal">
-    <div class="head"><div class="t">${icon("pencil", { size: 16 })} ${isMp ? "Rename file" : "Edit caption"}</div><button type="button" class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
+    <div class="head"><div class="t">${icon("pencil", { size: 16 })} Rename</div><button type="button" class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
     <div class="body">
-      <div class="field"><label>${isMp ? "File name" : "Caption (the message text)"}</label>
-        <div class="input-wrap">${icon("pencil", { size: 16, cls: "lead" })}<input id="cap" value="${esc(isMp ? f.name : f.caption || "")}" autofocus /></div></div>
+      <div class="field"><label>Name</label>
+        <div class="input-wrap">${icon("pencil", { size: 16, cls: "lead" })}<input id="cap" value="${esc(current)}" autofocus /></div></div>
       ${isMp ? `<p class="hint">This is a split file (${f.partsCount} parts). Renaming only affects how it is shown.</p>` : ""}
       <div class="err" id="err"></div>
       <div class="form-actions"><button type="button" class="btn-2 ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="primary" type="submit">${icon("check", { size: 15 })} Save</button></div>
@@ -1620,6 +1730,28 @@ async function deleteFolder(id) {
   }
 }
 window.deleteFolder = deleteFolder;
+
+async function renameFolder(id) {
+  const f = state.folders.find((x) => x.id === id);
+  if (!f || f.isSaved) return;
+  const title = await uiPrompt({
+    title: "Rename folder",
+    placeholder: "Folder name",
+    value: f.title,
+    okText: "Rename",
+    validate: (v) => (!v || !v.trim() ? "Name cannot be empty" : v.length > 80 ? "Too long" : null),
+  });
+  if (!title || title.trim() === f.title) return;
+  try {
+    await api("/api/folders/" + id, { method: "PATCH", body: JSON.stringify({ title: title.trim() }) });
+    await refreshFolders();
+    if (state.currentFolder === id) openFolder(id);
+    toast("Folder renamed");
+  } catch (err) {
+    uiAlert(err.message, { title: "Rename failed" });
+  }
+}
+window.renameFolder = renameFolder;
 
 function folderChain(id) {
   const chain = [];

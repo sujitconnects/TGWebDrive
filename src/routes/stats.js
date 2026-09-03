@@ -12,7 +12,7 @@ stats.get("/stats", requireAppAuth, requireAccount, async (req, res, next) => {
     const folderIds = [];
     const q = req.query.folder;
     if (q) folderIds.push(q);
-    else folderIds.push(...stmt.foldersFor.all(req.accountId).map((f) => f.id));
+    else folderIds.push(...(await stmt.foldersFor(req.accountId)).map((f) => f.id));
 
     let count = 0;
     let totalBytes = 0;
@@ -20,7 +20,7 @@ stats.get("/stats", requireAppAuth, requireAccount, async (req, res, next) => {
     const folders = [];
 
     for (const fid of folderIds.slice(0, 5)) {
-      const row = stmt.getFolder.get(fid, req.accountId);
+      const row = await stmt.getFolder(fid, req.accountId);
       if (!row) continue;
       const client = await getConnectedClient(req.accountId);
       const peer = buildPeer(row);
