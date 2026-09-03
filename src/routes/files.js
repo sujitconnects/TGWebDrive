@@ -3,7 +3,7 @@ import fs from "node:fs";
 import mime from "mime-types";
 import { stmt } from "../db.js";
 import { config } from "../config.js";
-import { requireAppAuth, requireAccount } from "../middleware.js";
+import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient, HttpError } from "../tg/manager.js";
 import {
   buildPeer,
@@ -56,7 +56,7 @@ async function loadFolder(req) {
   const folderId = req.query.folder || req.headers["x-folder"];
   if (!folderId) throw new HttpError(400, "Missing folder");
   const row = await stmt.getFolder(folderId, req.accountId);
-  if (!row) throw new HttpError(404, "Folder not found");
+  if (!row || !canAccessFolder(req, row.id)) throw new HttpError(404, "Folder not found");
   return { row, peer: buildPeer(row) };
 }
 
@@ -399,10 +399,10 @@ files.post("/files/move", requireAppAuth, requireAccount, async (req, res, next)
     if (!ids || !Array.isArray(ids) || !ids.length) return res.status(400).json({ error: "ids array required" });
 
     const sourceFolder = await stmt.getFolder(sourceFolderId, req.accountId);
-    if (!sourceFolder) return res.status(404).json({ error: "Source folder not found" });
+    if (!sourceFolder || !canAccessFolder(req, sourceFolder.id)) return res.status(404).json({ error: "Source folder not found" });
 
     const destFolder = await stmt.getFolder(destFolderId, req.accountId);
-    if (!destFolder) return res.status(404).json({ error: "Destination folder not found" });
+    if (!destFolder || !canAccessFolder(req, destFolder.id)) return res.status(404).json({ error: "Destination folder not found" });
 
     const sourcePeer = buildPeer(sourceFolder);
     const destPeer = buildPeer(destFolder);

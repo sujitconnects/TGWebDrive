@@ -190,7 +190,7 @@ npm start   # develop at http://localhost:3001
 
 ## Credits
 
-TGWebDrive is made with love by **[Samer Ahmed](https://linktr.ee/thesamgfx)**.
+TGWebDrive is made with love by **[Sujit Singh](https://linktr.ee/thesamgfx)**.
 
 - Built on [GramJS](https://github.com/nicemystery/telegram-mtapi) / [telegram](https://www.npmjs.com/package/telegram)
 - Icons by [Lucide](https://lucide.dev) (MIT)
@@ -202,4 +202,4 @@ If this project is useful to you, please star the repo — it helps others find 
 
 ## License
 
-[MIT](LICENSE) © Samer Ahmed
+[MIT](LICENSE) © Sujit Singh

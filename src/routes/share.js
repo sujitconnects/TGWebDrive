@@ -2,7 +2,7 @@ import { Router } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import archiver from "archiver";
 import { stmt, withTransaction } from "../db.js";
-import { requireAppAuth, requireAccount } from "../middleware.js";
+import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient, HttpError } from "../tg/manager.js";
 import { buildPeer, getOne, serializeMessage, serializeMultipart, parseParts, streamToResponse, streamMultipart, streamThumb, listMessages } from "../tg/operations.js";
 import { config } from "../config.js";
@@ -125,7 +125,7 @@ share.get("/shares", requireAppAuth, requireAccount, async (req, res) => {
 
 share.get("/shares/for", requireAppAuth, requireAccount, async (req, res) => {
   const row = await stmt.getFolder(req.query.folder, req.accountId);
-  if (!row) return res.status(404).json({ error: "Folder not found" });
+  if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
   let s;
   if (req.query.multipartId) {
     s = await stmt.getShareByMultipart(req.accountId, row.peer_json, String(req.query.multipartId));
@@ -138,7 +138,7 @@ share.get("/shares/for", requireAppAuth, requireAccount, async (req, res) => {
 
 share.get("/shares/forFolder", requireAppAuth, requireAccount, async (req, res) => {
   const row = await stmt.getFolder(req.query.folder, req.accountId);
-  if (!row) return res.status(404).json({ error: "Folder not found" });
+  if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
   const s = await stmt.getFolderShare(req.accountId, row.peer_json);
   if (!s) return res.json({ none: true });
   res.json({ share: { ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` } });
@@ -148,7 +148,7 @@ share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => 
   try {
     const { folder, msgId, msgIds, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
     const row = await stmt.getFolder(folder, req.accountId);
-    if (!row) return res.status(404).json({ error: "Folder not found" });
+      if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
     const shareKind = kind === "folder" ? "folder" : "file";
     const expiresAt = expiresInHours ? Date.now() + Number(expiresInHours) * 3600 * 1000 : null;
     const id = shortId(10);

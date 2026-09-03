@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { stmt } from "../db.js";
-import { requireAppAuth, requireAccount } from "../middleware.js";
+import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
 import { buildPeer, createChannelFolder, renameChannelFolder, deleteChannelFolder, listDialogs, SAVED_PEER } from "../tg/operations.js";
 import { uid } from "../util.js";
@@ -25,7 +25,8 @@ async function ensureSaved(accountId) {
 
 folders.get("/folders", requireAppAuth, requireAccount, async (req, res) => {
   await ensureSaved(req.accountId);
-  const list = (await stmt.foldersFor(req.accountId)).map((f) => ({
+  const all = await stmt.foldersFor(req.accountId);
+  const list = all.filter((f) => canAccessFolder(req, f.id)).map((f) => ({
     id: f.id,
     title: f.title,
     kind: f.kind,
@@ -42,7 +43,7 @@ folders.post("/folders", requireAppAuth, requireAccount, async (req, res, next) 
     const parentId = req.body?.parentId ? String(req.body.parentId) : null;
     if (parentId) {
       const parent = await stmt.getFolder(parentId, req.accountId);
-      if (!parent) return res.status(404).json({ error: "Parent folder not found" });
+      if (!parent || !canAccessFolder(req, parent.id)) return res.status(404).json({ error: "Parent folder not found" });
     }
     const client = await getConnectedClient(req.accountId);
     const created = await createChannelFolder(client, title);
@@ -93,7 +94,7 @@ folders.patch("/folders/:id", requireAppAuth, requireAccount, async (req, res, n
     const title = String(req.body?.title || "").trim();
     if (!title) return res.status(400).json({ error: "Folder name required" });
     const row = await stmt.getFolder(req.params.id, req.accountId);
-    if (!row) return res.status(404).json({ error: "Folder not found" });
+    if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
     if (row.kind === "saved") return res.status(400).json({ error: "Saved Messages can't be renamed" });
     const client = await getConnectedClient(req.accountId);
     await renameChannelFolder(client, buildPeer(row), title);
@@ -107,6 +108,7 @@ folders.patch("/folders/:id", requireAppAuth, requireAccount, async (req, res, n
 folders.delete("/folders/:id", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     const target = await stmt.getFolder(req.params.id, req.accountId);
+    if (target && !canAccessFolder(req, target.id)) return res.status(404).json({ error: "Folder not found" });
     if (target && target.kind === "saved") return res.status(400).json({ error: "Saved Messages can't be deleted" });
     // Recursively remove descendant subfolders so nothing is orphaned.
     const all = await stmt.foldersFor(req.accountId);
@@ -120,6 +122,7 @@ folders.delete("/folders/:id", requireAppAuth, requireAccount, async (req, res, 
       for (const cid of childrenOf(cur)) stack.push(cid);
     }
     const rows = all.filter((f) => visited.has(f.id));
+    if (rows.some((row) => !canAccessFolder(req, row.id))) return res.status(404).json({ error: "Folder not found" });
     if (rows.length) {
       const client = await getConnectedClient(req.accountId);
       for (const row of rows) {

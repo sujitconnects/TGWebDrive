@@ -103,6 +103,12 @@ export async function initDb() {
       created_at BIGINT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_folders (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+      PRIMARY KEY (user_id, folder_id)
+    );
+
     CREATE TABLE IF NOT EXISTS sessions (
       sid TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -184,7 +190,10 @@ export const stmt = {
       f.created_at,
     ]),
   foldersFor: (accountId) => query(`SELECT * FROM folders WHERE account_id = $1 ORDER BY kind DESC, lower(title)`, [accountId]),
+  foldersForUser: (accountId, userId) => query(`SELECT f.* FROM folders f JOIN user_folders uf ON uf.folder_id = f.id WHERE f.account_id = $1 AND uf.user_id = $2 ORDER BY f.kind DESC, lower(f.title)`, [accountId, userId]),
+  folderIdsForUser: (accountId, userId) => query(`SELECT f.id FROM folders f JOIN user_folders uf ON uf.folder_id = f.id WHERE f.account_id = $1 AND uf.user_id = $2`, [accountId, userId]),
   getFolder: (id, accountId) => one(`SELECT * FROM folders WHERE id = $1 AND account_id = $2`, [id, accountId]),
+  getFolderForUser: (id, accountId, userId) => one(`SELECT f.* FROM folders f JOIN user_folders uf ON uf.folder_id = f.id WHERE f.id = $1 AND f.account_id = $2 AND uf.user_id = $3`, [id, accountId, userId]),
   renameFolder: (id, accountId, title) => query(`UPDATE folders SET title = $1 WHERE id = $2 AND account_id = $3`, [title, id, accountId]),
   deleteFolder: (id, accountId) => query(`DELETE FROM folders WHERE id = $1 AND account_id = $2`, [id, accountId]),
 
@@ -219,6 +228,11 @@ export const stmt = {
   updateUser: (u) => query(`UPDATE users SET password_hash = $1, role = $2 WHERE id = $3`, [u.password_hash, u.role, u.id]),
   deleteUser: (id) => query(`DELETE FROM users WHERE id = $1`, [id]),
   countUsers: () => one(`SELECT COUNT(*)::int AS c FROM users`),
+  setUserFolders: async (userId, folderIds) => {
+    await query(`DELETE FROM user_folders WHERE user_id = $1`, [userId]);
+    for (const folderId of folderIds) await query(`INSERT INTO user_folders (user_id, folder_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [userId, folderId]);
+  },
+  userFolderIds: (userId) => query(`SELECT folder_id FROM user_folders WHERE user_id = $1`, [userId]),
 
   addMultipart: (m) =>
     query(`INSERT INTO multipart_files (id,account_id,peer_json,name,mime,size,parts_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [

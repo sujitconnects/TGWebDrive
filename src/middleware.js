@@ -100,11 +100,23 @@ export function requireAdmin(req, res, next) {
   next();
 }
 
-export function requireAccount(req, res, next) {
-  const accId = req.session.currentAccountId || req.headers["x-account"] || req.query.account;
-  if (!accId) return res.status(409).json({ error: "No Telegram account selected", noAccount: true });
-  req.accountId = accId;
-  next();
+export async function requireAccount(req, res, next) {
+  try {
+    const accId = req.session.currentAccountId || req.headers["x-account"] || req.query.account;
+    if (!accId) return res.status(409).json({ error: "No Telegram account selected", noAccount: true });
+    req.accountId = accId;
+    if (req.user.role !== "admin") {
+      const rows = await stmt.folderIdsForUser(accId, req.user.id);
+      req.allowedFolderIds = new Set(rows.map((row) => row.id));
+    }
+    next();
+  } catch (e) {
+    next(e);
+  }
+}
+
+export function canAccessFolder(req, folderId) {
+  return req.user?.role === "admin" || !req.allowedFolderIds || req.allowedFolderIds.has(String(folderId));
 }
 
 export { metaGet, metaSet, verifyPassword };

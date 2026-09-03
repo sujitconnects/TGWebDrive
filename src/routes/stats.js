@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { stmt } from "../db.js";
-import { requireAppAuth, requireAccount } from "../middleware.js";
+import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
 import { buildPeer, serializeMessage } from "../tg/operations.js";
 import { fmtBytes } from "../util.js";
@@ -21,7 +21,7 @@ stats.get("/stats", requireAppAuth, requireAccount, async (req, res, next) => {
 
     for (const fid of folderIds.slice(0, 5)) {
       const row = await stmt.getFolder(fid, req.accountId);
-      if (!row) continue;
+      if (!row || !canAccessFolder(req, row.id)) continue;
       const client = await getConnectedClient(req.accountId);
       const peer = buildPeer(row);
       let offsetId = 0;

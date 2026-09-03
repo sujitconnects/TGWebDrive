@@ -4,6 +4,7 @@ import {
   isSetup,
   requireAppAuth,
   requireAdmin,
+  requireAccount,
   createSession,
   getSession,
   updateSession,
@@ -88,19 +89,24 @@ auth.post("/auth/password", requireAppAuth, async (req, res) => {
 
 /* -------- Users (admin only) -------- */
 
-auth.get("/users", requireAppAuth, requireAdmin, async (req, res) => {
-  res.json({ users: (await stmt.listUsers()).map(publicUser), currentUserId: req.user.id });
+auth.get("/users", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
+  const users = await stmt.listUsers();
+  res.json({ users: await Promise.all(users.map(async (user) => ({ ...publicUser(user), folderIds: (await stmt.userFolderIds(user.id)).map((row) => row.folder_id) }))), currentUserId: req.user.id });
 });
 
-auth.post("/users", requireAppAuth, requireAdmin, async (req, res) => {
+auth.post("/users", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
+  const folderIds = Array.isArray(req.body?.folderIds) ? [...new Set(req.body.folderIds.map(String))] : [];
   if (!/^[a-z0-9_.-]{3,32}$/i.test(username)) return res.status(400).json({ error: "Username must be 3-32 chars (letters, numbers, _ . -)" });
   if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
   const id = uid();
+  const folders = await stmt.foldersFor(req.accountId);
+  if (folderIds.some((folderId) => !folders.some((folder) => folder.id === folderId))) return res.status(400).json({ error: "Invalid folder access" });
   try {
     await stmt.addUser({ id, username, password_hash: hashPassword(password), role, created_at: Date.now() });
+    if (role !== "admin") await stmt.setUserFolders(id, folderIds);
   } catch (e) {
     return res.status(400).json({ error: "Username already exists" });
   }

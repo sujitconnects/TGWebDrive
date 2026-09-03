@@ -13,7 +13,7 @@ const apiPresets = window.__PRESETS__ || [];
 /* ----- branding (instance-level, admin-configurable) ----- */
 let brand = { name: "Telegram Drive", accent: "#4f8cff", logo: "", tagline: "Secure file sharing", copyright: "" };
 const CREDIT_HREF = "https://linktr.ee/thesamgfx";
-const CREDIT_HTML = `Telegram Web Drive Made with <span class="heart">&hearts;</span> by <a class="credit-name" href="${CREDIT_HREF}" target="_blank" rel="noopener">Samer Ahmed</a>`;
+const CREDIT_HTML = `Telegram Web Drive Made with <span class="heart">&hearts;</span> by <a class="credit-name" href="${CREDIT_HREF}" target="_blank" rel="noopener">Sujit Singh</a>`;
 function hexShade(hex, amt) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "#4f8cff"));
   if (!m) return hex;
@@ -2116,7 +2116,7 @@ function viewSettings() {
           <div class="field"><label>Share tagline</label><input id="brTagline" value="${esc(brand.tagline)}" maxlength="80" placeholder="Secure file sharing" /></div>
           <div class="field"><label>Copyright line <span class="hint">(leave blank to auto-use “© year · name”)</span></label><input id="brCopy" value="${esc(brand.copyright)}" maxlength="80" placeholder="© ${new Date().getFullYear()} My Drive" /></div>
           <div class="brand-actions"><button class="primary" id="brSave">${icon("check", { size: 15 })} Save branding</button><div class="err" id="brErr"></div></div>
-          <p class="hint brand-credit-note">The credit “Telegram Web Drive Made with ♥ by Samer Ahmed” is always shown on public pages and cannot be removed.</p>
+          <p class="hint brand-credit-note">The credit “Telegram Web Drive Made with ♥ by Sujit Singh” is always shown on public pages and cannot be removed.</p>
         </div>
       </div>` : "";
   content().innerHTML = `
@@ -2273,7 +2273,9 @@ window.newUser = async () => {
     uiAlert(err.message, { title: "Couldn't create user" });
   }
 };
-function userFormModal() {
+async function userFormModal() {
+  const folderResponse = await api("/api/folders");
+  const folders = folderResponse.folders || [];
   return new Promise((resolve) => {
     const card = el(`<div class="modal card-modal gd-dialog">
       <div class="gd-dialog-body">
@@ -2282,6 +2284,7 @@ function userFormModal() {
         <div class="gd-dlg-field"><input id="ufU" placeholder="Username" autofocus /></div>
         <div class="gd-dlg-field"><input id="ufP" type="password" placeholder="Password" /></div>
         <label class="gd-check"><input type="checkbox" id="ufA" /><span>Make this user an admin</span></label>
+        <div class="gd-dlg-field" id="ufFolders"><div class="hint">Folders this user can access</div>${folders.map((folder) => `<label class="gd-check"><input type="checkbox" value="${esc(folder.id)}" /><span>${esc(folder.title)}</span></label>`).join("")}</div>
         <div class="err" id="ufE"></div>
       </div>
       <div class="gd-dialog-actions"><button class="btn-2" id="ufNo">Cancel</button><button class="primary" id="ufYes">Create</button></div>
@@ -2295,7 +2298,7 @@ function userFormModal() {
       if (!/^[a-z0-9_.-]{3,32}$/i.test(u)) return (E.textContent = "Username must be 3-32 chars (letters, numbers, _ . -)");
       if (p.length < 4) return (E.textContent = "Password must be at least 4 characters");
       bg._close();
-      resolve({ username: u, password: p, role: A.checked ? "admin" : "user" });
+      resolve({ username: u, password: p, role: A.checked ? "admin" : "user", folderIds: [...card.querySelectorAll("#ufFolders input:checked")].map((input) => input.value) });
     };
     const cancel = () => { bg._close(); resolve(null); };
     card.querySelector("#ufYes").onclick = submit;

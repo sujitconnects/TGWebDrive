@@ -23,6 +23,7 @@ export async function getConnectedClient(accountId) {
   let entry = clients.get(accountId);
   if (entry) {
     entry.lastUsed = Date.now();
+    if (entry.promise) return entry.promise;
     try {
       if (!entry.client.connected) await entry.client.connect();
       return entry.client;
@@ -33,19 +34,30 @@ export async function getConnectedClient(accountId) {
   const acc = await stmt.getAccount(accountId);
   if (!acc) throw new HttpError(404, "Account not found");
   const client = buildSession(acc.session, acc.api_id, acc.api_hash);
-  await connect(client);
-  // verify session still valid
-  let ok = false;
-  try {
-    ok = await client.isUserAuthorized();
-  } catch {
-    ok = false;
-  }
-  if (!ok) throw new HttpError(401, "Telegram session expired — please log in again");
   entry = { client, lastUsed: Date.now() };
+  entry.promise = (async () => {
+    await connect(client);
+    let ok = false;
+    try {
+      ok = await client.isUserAuthorized();
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new HttpError(401, "Telegram session expired — please log in again");
+    delete entry.promise;
+    return client;
+  })();
   clients.set(accountId, entry);
-  await stmt.touchAccount(Date.now(), accountId);
-  return client;
+  try {
+    const connected = await entry.promise;
+    await stmt.touchAccount(Date.now(), accountId);
+    return connected;
+  } catch (e) {
+    if (clients.get(accountId) === entry) clients.delete(accountId);
+    try { await client.disconnect(); } catch {}
+    if ((e?.errorMessage || e?.message || "").includes("AUTH_KEY_DUPLICATED")) throw mapTgError(e);
+    throw e;
+  }
 }
 
 export function dropClient(accountId) {
@@ -189,6 +201,7 @@ function mapTgError(e) {
   if (msg.includes("PHONE_CODE_INVALID")) return new HttpError(400, "Wrong login code");
   if (msg.includes("PHONE_CODE_EXPIRED")) return new HttpError(400, "Login code expired. Request a new one.");
   if (msg.includes("PASSWORD_HASH_INVALID")) return new HttpError(400, "Wrong 2FA password");
+  if (msg.includes("AUTH_KEY_DUPLICATED")) return new HttpError(409, "Telegram session is active in another TGWebDrive instance. Stop the other instance, then reconnect this Telegram account.");
   if (msg.includes("SESSION_REVOKED") || msg.includes("AUTH_KEY_UNREGISTERED"))
     return new HttpError(401, "Session revoked. Please log in again.");
   return new HttpError(status, msg);
