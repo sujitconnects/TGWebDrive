@@ -167,8 +167,8 @@ export async function listMessages(client, peer, { limit = 50, offsetId = 0, sea
     const s = serializeMessage(m);
     if (s) items.push(s);
   }
-  const last = messages.length ? Number(messages[messages.length - 1].id) : null;
-  return { items, nextOffset: last && messages.length >= limit ? last : null, count: items.length };
+  const oldestMessageId = messages.length ? Number(messages[messages.length - 1].id) : null;
+  return { items, nextOffset: oldestMessageId && messages.length >= limit ? oldestMessageId : null, count: items.length };
 }
 
 export async function getOne(client, peer, id) {

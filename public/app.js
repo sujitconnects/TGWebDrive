@@ -676,6 +676,7 @@ function content() {
 
 async function loadFiles(reset) {
   if (!state.currentFolder) return;
+  if (state.loading) return;
   if (reset) {
     state.offsetId = 0;
     state.files = [];
@@ -683,13 +684,37 @@ async function loadFiles(reset) {
   }
   state.loading = true;
   try {
-    const r = await api(`/api/files?folder=${state.currentFolder}&limit=60${state.offsetId ? `&offsetId=${state.offsetId}` : ""}${state.search ? `&search=${encodeURIComponent(state.search)}` : ""}`);
-    state.files = reset ? r.items : [...state.files, ...r.items];
-    state.offsetId = r.nextOffset;
+    let offsetId = reset ? 0 : state.offsetId;
+    let nextOffset = null;
+    let pageItems = [];
+    for (let page = 0; page < 5; page++) {
+      const r = await api(`/api/files?folder=${state.currentFolder}&limit=60${offsetId ? `&offsetId=${offsetId}` : ""}${state.search ? `&search=${encodeURIComponent(state.search)}` : ""}`);
+      pageItems.push(...(r.items || []));
+      nextOffset = r.nextOffset;
+      if (pageItems.length || !nextOffset) break;
+      offsetId = nextOffset;
+    }
+    const existing = reset ? new Set() : new Set(state.files.map((file) => selKey(file.id)));
+    const freshItems = pageItems.filter((file) => {
+      const key = selKey(file.id);
+      if (existing.has(key)) return false;
+      existing.add(key);
+      return true;
+    });
+    state.files = reset ? freshItems : [...state.files, ...freshItems];
+    state.offsetId = nextOffset;
     sortFiles();
     renderFiles();
   } catch (err) {
-    content().innerHTML = emptyHtml(err.message, "alert");
+    if (reset) content().innerHTML = emptyHtml(err.message, "alert");
+    else {
+      uiAlert(err.message, { title: "Couldn't load more files" });
+      const loadMoreBtn = content().querySelector("#loadMoreBtn");
+      if (loadMoreBtn) {
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.innerHTML = `${icon("chevronRight", { size: 14, cls: "down" })} Load more`;
+      }
+    }
   } finally {
     state.loading = false;
   }
@@ -835,8 +860,17 @@ function renderFiles() {
       </div>`
           )
           .join("")}</div>`;
-  const more = state.offsetId ? `<div class="load-more"><button class="btn-2" onclick="loadFiles(false)">${icon("chevronRight", { size: 14, cls: "down" })} Load more</button></div>` : "";
+  const more = state.offsetId ? `<div class="load-more"><button class="btn-2" id="loadMoreBtn" type="button">${icon("chevronRight", { size: 14, cls: "down" })} Load more</button></div>` : "";
   c.innerHTML = subsHtml + toolbar + list + more;
+  const loadMoreBtn = c.querySelector("#loadMoreBtn");
+  if (loadMoreBtn) {
+    loadMoreBtn.onclick = async () => {
+      if (state.loading) return;
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.innerHTML = `${icon("loader", { size: 14 })} Loading...`;
+      await loadFiles(false);
+    };
+  }
   wireFolderCards(c);
   $$(".card:not(.folder-card), .list .row", c).forEach((node) => {
     const id = node.dataset.id;
