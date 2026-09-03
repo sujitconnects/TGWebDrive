@@ -75,6 +75,7 @@ export async function initDb() {
       account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
       peer_json TEXT NOT NULL,
       msg_id INTEGER,
+      msg_ids TEXT, -- JSON array of msg IDs for multi-file shares
       multipart_id TEXT,
       name TEXT,
       mime TEXT,
@@ -130,6 +131,7 @@ export async function initDb() {
 
   // Migration: folder/multipart shares have no single message, so msg_id must be nullable.
   await pool.query(`ALTER TABLE shares ALTER COLUMN msg_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE shares ADD COLUMN IF NOT EXISTS msg_ids TEXT`);
 
   // Migration: seed an admin user from the legacy single admin password (if present),
   // so existing installs keep working after the upgrade to multi-user.
@@ -188,9 +190,9 @@ export const stmt = {
 
   addShare: (s) =>
     query(
-      `INSERT INTO shares (id,account_id,peer_json,msg_id,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [s.id, s.account_id, s.peer_json, s.msg_id, s.multipart_id, s.name, s.mime, s.size, s.password_hash, s.expires_at, s.created_at, s.kind]
+      `INSERT INTO shares (id,account_id,peer_json,msg_id,msg_ids,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [s.id, s.account_id, s.peer_json, s.msg_id, s.msg_ids ? JSON.stringify(s.msg_ids) : null, s.multipart_id, s.name, s.mime, s.size, s.password_hash, s.expires_at, s.created_at, s.kind]
     ),
   getShare: (id) => one(`SELECT * FROM shares WHERE id = $1`, [id]),
   getShareByFile: (accountId, peerJson, msgId) =>
@@ -233,6 +235,7 @@ export const stmt = {
   listMultipart: (accountId, peerJson) => query(`SELECT * FROM multipart_files WHERE account_id = $1 AND peer_json = $2 ORDER BY created_at DESC`, [accountId, peerJson]),
   renameMultipart: (m) => query(`UPDATE multipart_files SET name = $1 WHERE id = $2`, [m.name, m.id]),
   updateMultipartParts: (m) => query(`UPDATE multipart_files SET parts_json = $1 WHERE id = $2`, [m.parts_json, m.id]),
+  updateMultipart: (m) => query(`UPDATE multipart_files SET peer_json = $1 WHERE id = $2`, [m.peer_json, m.id]),
   deleteMultipart: (id) => query(`DELETE FROM multipart_files WHERE id = $1`, [id]),
   getShareByMultipart: (accountId, peerJson, multipartId) =>
     one(`SELECT * FROM shares WHERE account_id = $1 AND peer_json = $2 AND multipart_id = $3 ORDER BY created_at DESC LIMIT 1`, [accountId, peerJson, multipartId]),

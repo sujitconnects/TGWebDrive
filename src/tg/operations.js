@@ -467,3 +467,15 @@ export async function listDialogs(client) {
   }
   return out;
 }
+
+export async function forwardMessages(client, fromPeer, toPeer, ids) {
+  const res = await client.invoke(new Api.messages.ForwardMessages({
+    fromPeer,
+    toPeer,
+    id: ids.map(Number),
+    randomId: ids.map(() => bigInt(Math.floor(Math.random() * 1e15))),
+    dropAuthor: true,
+    dropMediaCaptions: false,
+  }));
+  return res.updates;
+}

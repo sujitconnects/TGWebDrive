@@ -252,6 +252,7 @@ const state = {
   sidebarOpen: false,
   sortBy: localStorage.getItem("tg.sortBy") || "date",
   sortDir: localStorage.getItem("tg.sortDir") || "desc",
+  bulkMode: false,
 };
 
 function theme(t) {
@@ -744,7 +745,47 @@ function folderCard(f) {
 }
 function wireFolderCards(scope) {
   $$(".folder-card", scope).forEach((n) => {
-    n.onclick = () => openFolder(n.dataset.folder);
+    const folderId = n.dataset.folder;
+    n.onclick = () => openFolder(folderId);
+    
+    // Drop support for folders
+    n.ondragover = (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      n.style.opacity = "0.7";
+      n.style.background = "var(--accent-soft)";
+    };
+    n.ondragleave = () => {
+      n.style.opacity = "1";
+      n.style.background = "";
+    };
+    n.ondrop = async (e) => {
+      e.preventDefault();
+      n.style.opacity = "1";
+      n.style.background = "";
+      try {
+        const data = JSON.parse(e.dataTransfer.getData("application/json"));
+        if (data.sourceFolderId === folderId) {
+          toast("Already in this folder");
+          return;
+        }
+        await api(`/api/files/move`, { 
+          method: "POST", 
+          body: JSON.stringify({ 
+            sourceFolderId: data.sourceFolderId, 
+            destFolderId: folderId, 
+            ids: data.fileIds 
+          }) 
+        });
+        state.selected.clear();
+        if (state.currentFolder === data.sourceFolderId) {
+          await loadFiles(true);
+        }
+        toast(`${data.fileIds.length} file(s) moved`);
+      } catch (err) {
+        uiAlert(err.message, { title: "Move failed" });
+      }
+    };
   });
 }
 function renderFiles() {
@@ -763,20 +804,22 @@ function renderFiles() {
   const selInfo = state.selected.size ? `<span class="sel-info">${icon("check", { size: 13 })} ${state.selected.size} selected</span>` : "";
   const allSel = state.files.length && state.selected.size === state.files.length;
   const selAllBtn = `<button class="btn-2 ghost" onclick="toggleSelectAll()">${allSel ? icon("x", { size: 14 }) + " Clear all" : icon("check", { size: 14 }) + " Select all"}</button>`;
-  const toolbar = `<div class="toolbar-row">${selInfo}${selAllBtn}<div class="spacer"></div>${
+  const bulkModeBtn = state.selected.size === 0 ? `<button class="btn-2 ${state.bulkMode ? "" : "ghost"}" onclick="toggleBulkMode()" title="Toggle bulk select mode">${icon("check", { size: 14 })} ${state.bulkMode ? "Bulk Mode ON" : "Bulk Mode"}</button>` : "";
+  const toolbar = `<div class="toolbar-row">${selInfo}${selAllBtn}<div class="spacer"></div>${bulkModeBtn}${
     state.selected.size
-      ? `<button class="btn-2" onclick="downloadSelected()">${icon("download", { size: 15 })} Download</button><button class="btn-2" onclick="shareSelected()">${icon("share", { size: 15 })} Share</button><button class="btn-2 danger" onclick="deleteSelected()">${icon("trash", { size: 15 })} Delete</button><button class="btn-2 ghost" onclick="clearSelection()">Clear</button>`
+      ? `<button class="btn-2" onclick="downloadSelected()">${icon("download", { size: 15 })} Download</button><button class="btn-2" onclick="moveSelected()">${icon("send", { size: 15 })} Move</button><button class="btn-2" onclick="shareSelected()">${icon("share", { size: 15 })} Share</button><button class="btn-2 danger" onclick="deleteSelected()">${icon("trash", { size: 15 })} Delete</button><button class="btn-2 ghost" onclick="clearSelection()">Clear</button>`
       : ``
   }</div>`;
   const partBadge = (f) => (f.multipart ? `<span class="mp-badge" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 11 })} ${f.partsCount}</span>` : "");
   const rowActions = (id) =>
-    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
+    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
   const list =
     state.view === "grid"
       ? `<div class="grid">${state.files.map(fileCard).join("")}</div>`
       : `<div class="list"><div class="list-head"><span>Name</span><span class="lh-right">Last modified · Size</span></div>${state.files
           .map(
             (f) => `<div class="row ${state.selected.has(selKey(f.id)) ? "selected" : ""}" data-id="${f.id}">
+        <div class="row-check" onclick="event.stopPropagation();toggleSelect('${f.id}')" style="cursor: pointer;"><input type="checkbox" ${state.selected.has(selKey(f.id)) ? "checked" : ""} style="cursor: pointer;"></div>
         <div class="row-ic">${fileIcon(f.kind, 20)}</div>
         <div class="row-main"><div class="row-nm">${esc(f.caption || f.name)}${partBadge(f)}</div><div class="row-sub">${fmtSize(f.size)} · ${fmtDate(f.date)}</div></div>
         <div class="row-ext">${esc(f.ext || "")}</div>
@@ -797,6 +840,14 @@ function renderFiles() {
       e.preventDefault();
       toggleSelect(id);
     };
+    // Drag support for files
+    node.draggable = true;
+    node.ondragstart = (e) => {
+      if (!state.selected.has(selKey(id))) toggleSelect(id);
+      const ids = state.files.filter((f) => state.selected.has(selKey(f.id))).map((f) => f.id);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("application/json", JSON.stringify({ fileIds: ids, sourceFolderId: state.currentFolder }));
+    };
   });
 }
 
@@ -806,9 +857,9 @@ function fileCard(f) {
   const thumb = `${fileIcon(f.kind, 40)}${showImg ? `<img class="thumb-img" loading="lazy" src="/api/files/${f.id}/thumb?folder=${state.currentFolder}" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()" alt="" />` : ""}`;
   const badge = f.kind === "video" ? `<span class="play-badge">${icon("play", { size: 12 })}</span>` : "";
   const mpTag = f.multipart ? `<span class="mp-tag" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 12 })} ${f.partsCount} parts</span>` : "";
-  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
+  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${f.id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
   return `<div class="card ${sel}" data-id="${f.id}">
-    <div class="card-sel">${icon("check", { size: 13 })}</div>
+    <div class="card-sel" onclick="event.stopPropagation();toggleSelect('${f.id}')" style="cursor: pointer;">${icon("check", { size: 13 })}</div>
     ${actions}
     <div class="thumb">${thumb}${badge}</div>
     <div class="meta"><div class="nm" title="${esc(f.caption || f.name)}">${esc(f.caption || f.name)}</div><div class="sz">${fmtSize(f.size)} · ${fmtDate(f.date)}${mpTag}</div></div>
@@ -838,6 +889,10 @@ window.toggleSelectAll = () => {
   else state.files.forEach((f) => state.selected.add(selKey(f.id)));
   renderFiles();
 };
+window.toggleBulkMode = () => {
+  state.bulkMode = !state.bulkMode;
+  renderFiles();
+};
 const fileById = (id) => state.files.find((f) => String(f.id) === String(id));
 window.downloadFileById = (id) => {
   const f = fileById(id);
@@ -864,6 +919,15 @@ window.deleteFileById = async (id) => {
     uiAlert(err.message, { title: "Delete failed" });
   }
 };
+window.moveFileById = async (id) => {
+  const f = fileById(id);
+  if (f) moveModal([f.id]);
+};
+window.moveSelected = async () => {
+  if (!state.selected.size) return;
+  const ids = state.files.filter((f) => state.selected.has(selKey(f.id))).map((f) => f.id);
+  moveModal(ids);
+};
 window.downloadSelected = () => state.files.filter((f) => state.selected.has(selKey(f.id))).forEach(downloadFile);
 window.deleteSelected = async () => {
   if (!(await uiConfirm(`${state.selected.size} file(s) will be permanently deleted from Telegram.`, { title: "Delete files?", okText: "Delete", danger: true, icon: icon("trash", { size: 20 }) }))) return;
@@ -877,8 +941,13 @@ window.deleteSelected = async () => {
   }
 };
 window.shareSelected = () => {
-  const f = state.files.find((x) => state.selected.has(selKey(x.id)));
-  if (f) shareModal(f);
+  const files = state.files.filter((x) => state.selected.has(selKey(x.id)));
+  if (!files.length) return;
+  if (files.length === 1) {
+    shareModal(files[0]);
+  } else {
+    shareMultipleModal(files);
+  }
 };
 
 function downloadFile(f) {
@@ -958,6 +1027,76 @@ function renameModal(f) {
   document.body.appendChild(modal);
 }
 window.renameModal = renameModal;
+
+/* ===================== move ===================== */
+function moveModal(fileIds) {
+  $("#pmodal")?.remove();
+  const modal = el(`<div class="modal-bg"><div class="modal card-modal">
+    <div class="head"><div class="t">${icon("send", { size: 16 })} Move ${fileIds.length} file(s)</div><button type="button" class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
+    <div class="body">
+      <div class="field"><label>Destination folder</label>
+        <div id="folderlist" class="folder-list" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px;"></div></div>
+      <div class="err" id="err"></div>
+      <div class="form-actions"><button type="button" class="btn-2 ghost" onclick="this.closest('.modal-bg').remove()">Cancel</button><button class="primary" id="movebtn" type="button" disabled>${icon("send", { size: 15 })} Move</button></div>
+    </div></div></div>`);
+  
+  let selectedFolder = null;
+  const folderList = modal.querySelector("#folderlist");
+  const moveBtn = modal.querySelector("#movebtn");
+  
+  // Populate folder list
+  const folders = state.folders.filter(f => f.id !== state.currentFolder);
+  if (!folders.length) {
+    folderList.innerHTML = '<p style="text-align: center; color: var(--fg-2); padding: 20px;">No other folders available</p>';
+    return;
+  }
+  
+  folders.forEach(folder => {
+    const folderItem = el(`<div class="folder-item" style="padding: 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; display: flex; align-items: center; gap: 12px;" data-folder="${folder.id}">
+      <div>${icon(folder.kind === "saved" ? "inbox" : "folder", { size: 20, cls: "fg-2" })}</div>
+      <div style="flex: 1;">
+        <div style="font-weight: 500;">${esc(folder.title)}</div>
+        <div style="font-size: 12px; color: var(--fg-2);">${folder.kind === "saved" ? "Saved Messages" : "Folder"}</div>
+      </div>
+    </div>`);
+    
+    folderItem.addEventListener("click", () => {
+      folderList.querySelectorAll(".folder-item").forEach(el => el.style.background = "transparent");
+      folderItem.style.background = "var(--accent-soft)";
+      selectedFolder = folder;
+      moveBtn.disabled = false;
+    });
+    
+    folderList.appendChild(folderItem);
+  });
+  
+  moveBtn.addEventListener("click", async () => {
+    if (!selectedFolder) return;
+    try {
+      moveBtn.disabled = true;
+      moveBtn.textContent = `${icon("loader", { size: 15 })} Moving...`;
+      await api(`/api/files/move`, { 
+        method: "POST", 
+        body: JSON.stringify({ 
+          sourceFolderId: state.currentFolder, 
+          destFolderId: selectedFolder.id, 
+          ids: fileIds 
+        }) 
+      });
+      state.selected.clear();
+      modal.remove();
+      await loadFiles(true);
+      toast(`${fileIds.length} file(s) moved`);
+    } catch (err) {
+      modal.querySelector("#err").textContent = err.message;
+      moveBtn.disabled = false;
+      moveBtn.textContent = `${icon("send", { size: 15 })} Move`;
+    }
+  });
+  
+  document.body.appendChild(modal);
+}
+window.moveModal = moveModal;
 
 /* ===================== share ===================== */
 async function copyText(text) {
@@ -1064,6 +1203,71 @@ function shareModal(f) {
       showCreate();
     }
   })();
+}
+window.shareModal = shareModal;
+
+function shareMultipleModal(files) {
+  const modal = el(`<div class="modal-bg"><div class="modal card-modal">
+    <div class="head"><div class="t">${icon("share", { size: 16 })} Share ${files.length} files</div><button type="button" class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
+    <div class="body">
+      <div style="max-height: 300px; overflow-y: auto; margin-bottom: 20px; padding: 12px; background: var(--bg-2); border-radius: 8px;">
+        ${files.map(f => `<div style="padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px;">
+          ${fileIcon(f.kind, 16)}
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${esc(f.name || f.caption)}</div>
+            <div style="font-size: 12px; color: var(--fg-2);">${fmtSize(f.size)}</div>
+          </div>
+        </div>`).join("")}
+      </div>
+      <div class="field"><label>${icon("lock", { size: 13 })} Password (optional)</label>
+        <div class="input-wrap">${icon("lock", { size: 16, cls: "lead" })}<input id="mpw" type="password" placeholder="Leave blank for public" /></div></div>
+      <div class="field"><label>${icon("clock", { size: 13 })} Expires</label><select id="mexp">
+        <option value="">Never</option><option value="1">1 hour</option><option value="24">1 day</option><option value="168">1 week</option></select></div>
+      <div id="links-container" style="max-height: 300px; overflow-y: auto;"></div>
+      <div class="err" id="err"></div>
+      <div class="form-actions"><button type="button" class="btn-2 ghost" onclick="this.closest('.modal-bg').remove()">Close</button><button class="primary" id="createMultiShareBtn" type="button">${icon("link", { size: 15 })} Create links</button></div>
+    </div></div></div>`);
+  
+  document.body.appendChild(modal);
+  
+  const createBtn = modal.querySelector("#createMultiShareBtn");
+  const linksContainer = modal.querySelector("#links-container");
+  const errEl = modal.querySelector("#err");
+  
+  createBtn.onclick = async () => {
+    const pw = modal.querySelector("#mpw").value;
+    const exp = modal.querySelector("#mexp").value || null;
+    
+    createBtn.disabled = true;
+    createBtn.innerHTML = `${icon("loader", { size: 15 })} Creating...`;
+    errEl.textContent = "";
+    linksContainer.innerHTML = "";
+    
+    try {
+      const multipart = files.find((file) => file.multipart);
+      if (multipart) throw new Error("Sharing split files together is not supported yet");
+      const r = await api("/api/shares", {
+        method: "POST",
+        body: JSON.stringify({
+          folder: state.currentFolder,
+          msgIds: files.map((file) => Number(file.id)),
+          password: pw,
+          expiresInHours: exp,
+        }),
+      });
+      const safeUrl = esc(r.url).replace(/'/g, "\\'").replace(/"/g, '\\"');
+      linksContainer.innerHTML = `<div style="margin-top: 20px; padding: 16px; background: var(--bg-3); border-radius: 8px;">
+        <div style="font-weight: 600; margin-bottom: 12px;">One link for ${files.length} selected files</div>
+        <div class="copy-row" style="margin-bottom: 12px;"><input type="text" readonly value="${esc(r.url)}" style="flex: 1; padding: 8px;" /><button class="btn-2" onclick="copyText('${safeUrl}'); toast('Copied!')">${icon("copy", { size: 14 })} Copy</button></div>
+        <a href="${esc(r.url)}" target="_blank" rel="noopener" class="primary">${icon("externalLink", { size: 12 })} Open Share</a>
+      </div>`;
+      createBtn.innerHTML = `${icon("refresh", { size: 15 })} Create another`;
+    } catch (err) {
+      errEl.textContent = err.message;
+      createBtn.disabled = false;
+      createBtn.innerHTML = `${icon("link", { size: 15 })} Try again`;
+    }
+  };
 }
 window.shareModal = shareModal;
 
@@ -2134,6 +2338,7 @@ async function renderPublicShare(id) {
   let s;
   try {
     s = await api(`/api/public/share/${id}`);
+    console.log("Share data:", { id: s.id, kind: s.kind, name: s.name, size: s.size, msgId: s.msgId });
   } catch (err) {
     return renderError(err.data?.error || err.message || "Share not available.");
   }
@@ -2171,7 +2376,7 @@ async function renderPublicShare(id) {
   }
 
   async function renderContent(token) {
-    if (s.kind === "folder") return renderFolder(token);
+    if (s.kind === "folder" || s.msgIds?.length) return renderFolder(token);
     return renderFile(token);
   }
 
@@ -2202,7 +2407,7 @@ async function renderPublicShare(id) {
   async function renderFolder(token) {
     const zipUrl = `/s/${id}/zip${tParam(token)}`;
     $("#app").innerHTML = shell(`<div class="pub-card wide">
-      <div class="pub-folder-head">${icon("folder", { size: 30 })}<div class="pub-fh-info"><div class="pub-name">${esc(s.name)}</div><div class="pub-stats" id="fcount">Loading files…</div></div><a class="pub-btn sm" id="dlAllBtn" href="${zipUrl}" download>${icon("download", { size: 15 })}<span>Download all</span></a></div>
+      <div class="pub-folder-head">${icon("folder", { size: 30 })}<div class="pub-fh-info"><div class="pub-name">${esc(s.kind === "folder" ? s.name : "Selected files")}</div><div class="pub-stats" id="fcount">Loading files…</div></div><a class="pub-btn sm" id="dlAllBtn" href="${zipUrl}" download>${icon("download", { size: 15 })}<span>Download all</span></a></div>
       <div class="pub-grid" id="fgrid"><div class="center-load" style="min-height:140px"><div class="spinner"></div></div></div>
     </div>`);
     let items = [];

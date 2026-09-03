@@ -45,6 +45,7 @@ function publicShare(s) {
     expired: s.expires_at && s.expires_at < Date.now(),
     createdAt: s.created_at,
     downloads: s.downloads,
+    msgIds: s.msg_ids ? JSON.parse(s.msg_ids) : null,
   };
 }
 
@@ -89,17 +90,27 @@ share.get("/public/share/:id/files", async (req, res, next) => {
   try {
     const s = await loadShareOrDeny(req, res);
     if (!s) return;
-    if ((s.kind || "file") !== "folder") return res.status(400).json({ error: "Not a folder share" });
+    if ((s.kind || "file") !== "folder" && !s.msg_ids) return res.status(400).json({ error: "Not a multi-file share" });
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const r = await listMessages(client, peer, { limit: 200 });
     const token = encodeURIComponent(req.query.token || "");
-    const items = r.items.map((f) => ({
+    // Filter items based on share type
+    let items = r.items;
+    if (s.msg_ids) {
+      // Multi-file share: filter by msg_ids array
+      const allowedIds = JSON.parse(s.msg_ids).map(Number);
+      items = items.filter(f => allowedIds.includes(Number(f.id)));
+    } else if (s.msg_id) {
+      // Single file share: filter by msg_id
+      items = items.filter(f => Number(f.id) === Number(s.msg_id));
+    }
+    const mapped = items.map((f) => ({
       ...f,
       rawUrl: `/s/${s.id}/file/${f.id}/raw${token ? "?token=" + token : ""}`,
       thumbUrl: `/s/${s.id}/file/${f.id}/thumb${token ? "?token=" + token : ""}`,
     }));
-    res.json({ items });
+    res.json({ items: mapped });
   } catch (e) {
     next(e);
   }
@@ -135,12 +146,15 @@ share.get("/shares/forFolder", requireAppAuth, requireAccount, async (req, res) 
 
 share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
-    const { folder, msgId, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
+    const { folder, msgId, msgIds, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
     const row = await stmt.getFolder(folder, req.accountId);
     if (!row) return res.status(404).json({ error: "Folder not found" });
     const shareKind = kind === "folder" ? "folder" : "file";
     const expiresAt = expiresInHours ? Date.now() + Number(expiresInHours) * 3600 * 1000 : null;
     const id = shortId(10);
+
+    // Support both single file (msgId) and multi-file (msgIds array) shares
+    const finalMsgIds = msgIds ? msgIds.map(Number) : null;
 
     // deleting the previous share and inserting the new one must be atomic —
     // otherwise a failed insert (e.g. a constraint error) leaves the folder/file
@@ -149,9 +163,9 @@ share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => 
       if (shareKind === "folder") {
         await q(`DELETE FROM shares WHERE account_id = $1 AND peer_json = $2 AND kind = 'folder'`, [req.accountId, row.peer_json]);
         await q(
-          `INSERT INTO shares (id,account_id,peer_json,msg_id,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [id, req.accountId, row.peer_json, null, null, title || row.title || "Folder", null, null, password ? hashPassword(password) : null, expiresAt, Date.now(), "folder"]
+          `INSERT INTO shares (id,account_id,peer_json,msg_id,msg_ids,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [id, req.accountId, row.peer_json, null, null, null, title || row.title || "Folder", null, null, password ? hashPassword(password) : null, expiresAt, Date.now(), "folder"]
         );
       } else if (multipartId) {
         // a split (multipart) file shared as one logical file
@@ -159,22 +173,39 @@ share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => 
         if (!mp || mp.account_id !== req.accountId) throw new HttpError(404, "File not found");
         await q(`DELETE FROM shares WHERE multipart_id = $1`, [String(multipartId)]);
         await q(
-          `INSERT INTO shares (id,account_id,peer_json,msg_id,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          `INSERT INTO shares (id,account_id,peer_json,msg_id,msg_ids,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
           [
-            id, req.accountId, row.peer_json, null, String(multipartId),
+            id, req.accountId, row.peer_json, null, null, String(multipartId),
             name || mp.name || null, mime || mp.mime || null, size || mp.size || null,
             password ? hashPassword(password) : null, expiresAt, Date.now(), "file",
           ]
         );
-      } else {
-        if (!msgId) throw new HttpError(400, "msgId required");
+      } else if (finalMsgIds && finalMsgIds.length > 0) {
+        // Multi-file share or single file share
+        const msgIdsJson = finalMsgIds.length > 1 ? JSON.stringify(finalMsgIds) : null;
+        const singleMsgId = finalMsgIds.length === 1 ? finalMsgIds[0] : null;
+        
+        // Delete old shares for this file (if single file)
+        if (singleMsgId) {
+          await q(`DELETE FROM shares WHERE account_id = $1 AND peer_json = $2 AND msg_id = $3`, [req.accountId, row.peer_json, singleMsgId]);
+        }
+        
+        await q(
+          `INSERT INTO shares (id,account_id,peer_json,msg_id,msg_ids,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [id, req.accountId, row.peer_json, singleMsgId, msgIdsJson, null, name || null, mime || null, size || null, password ? hashPassword(password) : null, expiresAt, Date.now(), "file"]
+        );
+      } else if (msgId) {
+        // Backward compatibility: single msgId parameter
         await q(`DELETE FROM shares WHERE account_id = $1 AND peer_json = $2 AND msg_id = $3`, [req.accountId, row.peer_json, Number(msgId)]);
         await q(
-          `INSERT INTO shares (id,account_id,peer_json,msg_id,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [id, req.accountId, row.peer_json, Number(msgId), null, name || null, mime || null, size || null, password ? hashPassword(password) : null, expiresAt, Date.now(), "file"]
+          `INSERT INTO shares (id,account_id,peer_json,msg_id,msg_ids,multipart_id,name,mime,size,password_hash,expires_at,created_at,kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [id, req.accountId, row.peer_json, Number(msgId), null, null, name || null, mime || null, size || null, password ? hashPassword(password) : null, expiresAt, Date.now(), "file"]
         );
+      } else {
+        throw new HttpError(400, "msgId or msgIds required");
       }
     });
     res.json({ ok: true, id, kind: shareKind, url: `${config.publicUrl}/s/${id}`, expiresAt });
@@ -234,7 +265,7 @@ pubBin.get("/s/:id/file/:msgId/raw", async (req, res, next) => {
   try {
     const s = await loadShareOrDeny(req, res);
     if (!s) return;
-    if ((s.kind || "file") !== "folder") return res.status(400).end();
+    if ((s.kind || "file") !== "folder" && !s.msg_ids) return res.status(400).end();
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, req.params.msgId);
@@ -262,10 +293,12 @@ pubBin.get("/s/:id/zip", async (req, res, next) => {
   try {
     const s = await loadShareOrDeny(req, res);
     if (!s) return;
-    if ((s.kind || "file") !== "folder") return res.status(400).end();
+    if ((s.kind || "file") !== "folder" && !s.msg_ids) return res.status(400).end();
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const r = await listMessages(client, peer, { limit: 200 });
+    const allowedIds = s.msg_ids ? new Set(JSON.parse(s.msg_ids).map(Number)) : null;
+    const items = allowedIds ? r.items.filter((file) => allowedIds.has(Number(file.id))) : r.items;
     const zipName = safeFilename((s.name || "folder") + ".zip");
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`);
@@ -277,7 +310,7 @@ pubBin.get("/s/:id/zip", async (req, res, next) => {
     });
     archive.pipe(res);
     const used = new Set();
-    for (const f of r.items) {
+    for (const f of items) {
       try {
         const msg = await getOne(client, peer, f.id);
         const buf = await client.downloadMedia(msg);

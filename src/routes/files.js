@@ -16,6 +16,7 @@ import {
   uploadFile,
   renameFile,
   deleteFiles,
+  forwardMessages,
   streamToResponse,
   streamMultipart,
   streamThumb,
@@ -385,6 +386,57 @@ files.delete("/files", requireAppAuth, requireAccount, async (req, res, next) =>
     }
 
     res.json({ ok: true, deleted });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* --------- move --------- */
+files.post("/files/move", requireAppAuth, requireAccount, async (req, res, next) => {
+  try {
+    const { sourceFolderId, destFolderId, ids } = req.body || {};
+    if (!sourceFolderId || !destFolderId) return res.status(400).json({ error: "sourceFolderId and destFolderId required" });
+    if (!ids || !Array.isArray(ids) || !ids.length) return res.status(400).json({ error: "ids array required" });
+
+    const sourceFolder = await stmt.getFolder(sourceFolderId, req.accountId);
+    if (!sourceFolder) return res.status(404).json({ error: "Source folder not found" });
+
+    const destFolder = await stmt.getFolder(destFolderId, req.accountId);
+    if (!destFolder) return res.status(404).json({ error: "Destination folder not found" });
+
+    const sourcePeer = buildPeer(sourceFolder);
+    const destPeer = buildPeer(destFolder);
+    const client = await getConnectedClient(req.accountId);
+
+    const mpIds = ids.filter((x) => isMultipartId(x));
+    const msgIds = ids.filter((x) => !isMultipartId(x));
+    let moved = 0;
+
+    if (msgIds.length) {
+      try {
+        await forwardMessages(client, sourcePeer, destPeer, msgIds);
+        await deleteFiles(client, sourcePeer, msgIds);
+        moved += msgIds.length;
+      } catch (e) {
+        return res.status(400).json({ error: "Failed to move files: " + e.message });
+      }
+    }
+
+    for (const mpId of mpIds) {
+      const mp = await stmt.getMultipart(mpId);
+      if (!mp || mp.account_id !== req.accountId) continue;
+      const partIds = parseParts(mp).map((p) => p.msgId).filter(Boolean);
+      if (partIds.length) {
+        try {
+          await forwardMessages(client, sourcePeer, destPeer, partIds);
+          await deleteFiles(client, sourcePeer, partIds);
+        } catch {}
+      }
+      await stmt.updateMultipart({ id: mpId, peer_json: JSON.stringify(destFolder.peer_json) });
+      moved++;
+    }
+
+    res.json({ ok: true, moved });
   } catch (e) {
     next(e);
   }
