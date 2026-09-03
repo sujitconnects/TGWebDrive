@@ -45,7 +45,7 @@ export const config = {
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
   // Keep large uploads in smaller Telegram transfers so a connection reset does
   // not lose an entire multi-gigabyte upload. Parts reassemble on download.
-  splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || 1024 * 1024 * 1024,
+  splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || 512 * 1024 * 1024,
   apiPresets: (process.env.API_PRESETS || "")
     .split(",")
     .map((s) => s.trim())

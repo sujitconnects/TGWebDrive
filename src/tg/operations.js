@@ -180,18 +180,30 @@ export async function getOne(client, peer, id) {
 
 /* ---------- upload ---------- */
 
-export function uploadFile(client, peer, { filePath, fileName, fileSize, caption, forceDocument, onProgress, thumb }) {
-  return client.sendFile(peer, {
-    file: filePath,
-    fileName,
-    fileSize,
-    caption: caption || "",
-    forceDocument: !!forceDocument,
-    supportsStreaming: true,
-    thumb,
-    workers: 1,
-    progressCallback: onProgress,
-  });
+export async function uploadFile(client, peer, { filePath, fileName, fileSize, caption, forceDocument, onProgress, thumb }) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (!client.connected) await client.connect();
+      return await client.sendFile(peer, {
+        file: filePath,
+        fileName,
+        fileSize,
+        caption: caption || "",
+        forceDocument: !!forceDocument,
+        supportsStreaming: true,
+        thumb,
+        workers: 1,
+        progressCallback: onProgress,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) throw error;
+      try { await client.disconnect(); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 /* ---------- rename (caption) / delete ---------- */
