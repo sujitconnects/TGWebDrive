@@ -2498,13 +2498,38 @@ async function renderPublicShare(id) {
         const kind = f.kind;
         const showImg = kind === "image" || kind === "video";
         const thumb = `${fileIcon(kind, 38)}${showImg ? `<img class="thumb-img" loading="lazy" src="${f.thumbUrl}" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()" alt="" />` : ""}`;
-        return `<a class="pub-item" href="${withDl(f.rawUrl)}" target="_blank" rel="noopener">
+        return `<button class="pub-item" type="button" data-public-preview="${esc(JSON.stringify({ name: f.name, kind, size: f.size, rawUrl: f.rawUrl, thumbUrl: f.thumbUrl }))}">
           <div class="thumb">${thumb}${kind === "video" ? `<span class="play-badge">${icon("play", { size: 11 })}</span>` : ""}</div>
           <div class="pub-iname" title="${esc(f.caption || f.name)}">${esc(f.caption || f.name)}</div>
           <div class="pub-isize">${fmtSize(f.size)}</div>
-        </a>`;
+        </button>`;
       })
       .join("");
+    $$("[data-public-preview]", $("#fgrid")).forEach((item) => {
+      item.onclick = () => showPublicPreview(JSON.parse(item.dataset.publicPreview), token);
+    });
+  }
+
+  function showPublicPreview(file, token) {
+    const raw = file.rawUrl;
+    const download = withDl(raw);
+    let media = `<div class="pub-lightbox-file">${fileIcon(file.kind, 64)}<div>No preview available</div></div>`;
+    if (file.kind === "image") media = `<img class="pub-lightbox-image" src="${esc(file.thumbUrl || raw)}" alt="${esc(file.name)}" />`;
+    else if (file.kind === "video") media = `<video class="pub-lightbox-video" src="${esc(raw)}" controls autoplay playsinline></video>`;
+    else if (file.kind === "audio") media = `<audio class="pub-lightbox-audio" src="${esc(raw)}" controls autoplay></audio>`;
+    else if (file.kind === "pdf") media = `<iframe class="pub-lightbox-pdf" src="${esc(raw)}"></iframe>`;
+    const modal = el(`<div class="pub-lightbox"><div class="pub-lightbox-panel">
+      <div class="pub-lightbox-head"><div class="pub-name">${esc(file.name)}</div><button type="button" class="icon-btn" aria-label="Close">${icon("x", { size: 20 })}</button></div>
+      <div class="pub-lightbox-media">${media}</div>
+      <div class="pub-lightbox-actions"><span class="pub-stats">${fmtSize(file.size)}</span><a class="pub-btn primary" href="${esc(download)}" download>${icon("download", { size: 17 })}<span>Download</span></a></div>
+    </div></div>`);
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.querySelector(".icon-btn").onclick = close;
+    modal.onclick = (event) => { if (event.target === modal) close(); };
+    document.addEventListener("keydown", function onKey(event) {
+      if (event.key === "Escape") { close(); document.removeEventListener("keydown", onKey); }
+    });
   }
 
   if (s.needsPassword) showGate();
