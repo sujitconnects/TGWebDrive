@@ -43,10 +43,9 @@ export const config = {
   secret: readSecret(),
   publicUrl: (process.env.PUBLIC_URL || "").replace(/\/$/, ""),
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
-  // Max bytes per Telegram message. Files larger than this are transparently
-  // split into multipart entries that reassemble on download. ~1.9 GiB keeps a
-  // safe margin under Telegram's 2 GiB per-file cap.
-  splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || Math.floor(1.9 * 1024 * 1024 * 1024),
+  // Keep large uploads in smaller Telegram transfers so a connection reset does
+  // not lose an entire multi-gigabyte upload. Parts reassemble on download.
+  splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || 1024 * 1024 * 1024,
   apiPresets: (process.env.API_PRESETS || "")
     .split(",")
     .map((s) => s.trim())

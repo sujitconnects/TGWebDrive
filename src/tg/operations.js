@@ -189,6 +189,7 @@ export function uploadFile(client, peer, { filePath, fileName, fileSize, caption
     forceDocument: !!forceDocument,
     supportsStreaming: true,
     thumb,
+    workers: 1,
     progressCallback: onProgress,
   });
 }
