@@ -60,13 +60,11 @@ export async function getConnectedClient(accountId) {
   }
 }
 
-export function dropClient(accountId) {
+export async function dropClient(accountId) {
   const entry = clients.get(accountId);
   if (entry) {
-    try {
-      entry.client.disconnect();
-    } catch {}
     clients.delete(accountId);
+    try { await entry.client.disconnect(); } catch {}
   }
 }
 
@@ -117,7 +115,7 @@ export async function resendCode(tempToken) {
   }
 }
 
-export async function finishLogin(tempToken, code, password) {
+export async function finishLogin(tempToken, code, password, existingAccountId = null) {
   const L = logins.get(tempToken);
   if (!L) throw new HttpError(400, "Login session expired. Start again.");
   const { client, apiId, apiHash, phone, phoneCodeHash } = L;
@@ -138,9 +136,9 @@ export async function finishLogin(tempToken, code, password) {
 
     const me = await client.getMe();
     const sessionStr = client.session.save();
-    const id = uid();
+    const id = existingAccountId || uid();
     const now = Date.now();
-    await stmt.addAccount({
+    const account = {
       id,
       label: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || phone || "Account",
       phone,
@@ -152,7 +150,9 @@ export async function finishLogin(tempToken, code, password) {
       is_premium: me.premium ? 1 : 0,
       created_at: now,
       last_used_at: now,
-    });
+    };
+    if (existingAccountId) await stmt.updateAccount(account);
+    else await stmt.addAccount(account);
     clients.set(id, { client, lastUsed: now });
     logins.delete(tempToken);
     return { id, me: { name: (await stmt.getAccount(id)).label, username: me.username || null, phone, premium: !!me.premium } };

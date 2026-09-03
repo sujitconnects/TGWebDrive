@@ -19,7 +19,7 @@ function cookieSecure(req) {
   return !!(req.secure || req.protocol === "https" || req.headers["x-forwarded-proto"] === "https");
 }
 
-export async function createSession(req, res, user, { remember = false } = {}) {
+export async function createSession(req, res, user, { remember = false, currentAccountId = null } = {}) {
   const sid = token(24);
   const now = Date.now();
   const ttl = remember ? TTL_REMEMBER : TTL_SESSION;
@@ -28,7 +28,7 @@ export async function createSession(req, res, user, { remember = false } = {}) {
     user_id: user.id,
     username: user.username,
     role: user.role,
-    current_account_id: null,
+    current_account_id: currentAccountId,
     created_at: now,
     expires_at: now + ttl,
   });

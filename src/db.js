@@ -166,6 +166,7 @@ export const stmt = {
       [a.id, a.label, a.phone, a.user_id, a.username, a.api_id, a.api_hash, a.session, a.is_premium, a.created_at, a.last_used_at]
     ),
   listAccounts: () => query(`SELECT * FROM accounts ORDER BY last_used_at DESC`),
+  accountsForUser: (userId) => query(`SELECT DISTINCT a.* FROM accounts a JOIN folders f ON f.account_id = a.id JOIN user_folders uf ON uf.folder_id = f.id WHERE uf.user_id = $1 ORDER BY a.last_used_at DESC`, [userId]),
   getAccount: (id) => one(`SELECT * FROM accounts WHERE id = $1`, [id]),
   touchAccount: (ts, id) => query(`UPDATE accounts SET last_used_at = $1 WHERE id = $2`, [ts, id]),
   updateAccount: (a) =>

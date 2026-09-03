@@ -2,7 +2,7 @@ import { Router } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import archiver from "archiver";
 import { stmt, withTransaction } from "../db.js";
-import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
+import { requireAppAuth, requireAccount, requireAdmin, canAccessFolder } from "../middleware.js";
 import { getConnectedClient, HttpError } from "../tg/manager.js";
 import { buildPeer, getOne, serializeMessage, serializeMultipart, parseParts, streamToResponse, streamMultipart, streamThumb, listMessages } from "../tg/operations.js";
 import { config } from "../config.js";
@@ -116,14 +116,14 @@ share.get("/public/share/:id/files", async (req, res, next) => {
   }
 });
 
-share.get("/shares", requireAppAuth, requireAccount, async (req, res) => {
+share.get("/shares", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const list = (await stmt.listShares())
     .filter((s) => s.account_id === req.accountId)
     .map((s) => ({ ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` }));
   res.json({ shares: list });
 });
 
-share.get("/shares/for", requireAppAuth, requireAccount, async (req, res) => {
+share.get("/shares/for", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const row = await stmt.getFolder(req.query.folder, req.accountId);
   if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
   let s;
@@ -136,7 +136,7 @@ share.get("/shares/for", requireAppAuth, requireAccount, async (req, res) => {
   res.json({ share: { ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` } });
 });
 
-share.get("/shares/forFolder", requireAppAuth, requireAccount, async (req, res) => {
+share.get("/shares/forFolder", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const row = await stmt.getFolder(req.query.folder, req.accountId);
   if (!row || !canAccessFolder(req, row.id)) return res.status(404).json({ error: "Folder not found" });
   const s = await stmt.getFolderShare(req.accountId, row.peer_json);
@@ -144,7 +144,7 @@ share.get("/shares/forFolder", requireAppAuth, requireAccount, async (req, res) 
   res.json({ share: { ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` } });
 });
 
-share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => {
+share.post("/shares", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const { folder, msgId, msgIds, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
     const row = await stmt.getFolder(folder, req.accountId);
@@ -214,7 +214,7 @@ share.post("/shares", requireAppAuth, requireAccount, async (req, res, next) => 
   }
 });
 
-share.delete("/shares/:id", requireAppAuth, requireAccount, async (req, res) => {
+share.delete("/shares/:id", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const s = await stmt.getShare(req.params.id);
   if (s && s.account_id === req.accountId) await stmt.deleteShare(req.params.id);
   res.json({ ok: true });

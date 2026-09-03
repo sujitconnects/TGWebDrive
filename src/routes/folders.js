@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { stmt } from "../db.js";
-import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
+import { requireAppAuth, requireAccount, requireAdmin, canAccessFolder } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
 import { buildPeer, createChannelFolder, renameChannelFolder, deleteChannelFolder, listDialogs, SAVED_PEER } from "../tg/operations.js";
 import { uid } from "../util.js";
@@ -36,7 +36,7 @@ folders.get("/folders", requireAppAuth, requireAccount, async (req, res) => {
   res.json({ folders: list });
 });
 
-folders.post("/folders", requireAppAuth, requireAccount, async (req, res, next) => {
+folders.post("/folders", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const title = String(req.body?.title || "").trim();
     if (!title) return res.status(400).json({ error: "Folder name required" });
@@ -63,7 +63,7 @@ folders.post("/folders", requireAppAuth, requireAccount, async (req, res, next) 
   }
 });
 
-folders.get("/chats", requireAppAuth, requireAccount, async (req, res, next) => {
+folders.get("/chats", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const client = await getConnectedClient(req.accountId);
     const chats = await listDialogs(client);
@@ -73,7 +73,7 @@ folders.get("/chats", requireAppAuth, requireAccount, async (req, res, next) => 
   }
 });
 
-folders.post("/folders/import", requireAppAuth, requireAccount, async (req, res) => {
+folders.post("/folders/import", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
   const { channelId, accessHash, title } = req.body || {};
   if (!channelId || accessHash == null || !title) return res.status(400).json({ error: "channelId, accessHash, title required" });
   const id = uid();
@@ -89,7 +89,7 @@ folders.post("/folders/import", requireAppAuth, requireAccount, async (req, res)
   res.json({ ok: true, id, title });
 });
 
-folders.patch("/folders/:id", requireAppAuth, requireAccount, async (req, res, next) => {
+folders.patch("/folders/:id", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const title = String(req.body?.title || "").trim();
     if (!title) return res.status(400).json({ error: "Folder name required" });
@@ -105,7 +105,7 @@ folders.patch("/folders/:id", requireAppAuth, requireAccount, async (req, res, n
   }
 });
 
-folders.delete("/folders/:id", requireAppAuth, requireAccount, async (req, res, next) => {
+folders.delete("/folders/:id", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const target = await stmt.getFolder(req.params.id, req.accountId);
     if (target && !canAccessFolder(req, target.id)) return res.status(404).json({ error: "Folder not found" });

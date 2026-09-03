@@ -1,9 +1,10 @@
 import { Router } from "express";
 import fs from "node:fs";
 import mime from "mime-types";
+import archiver from "archiver";
 import { stmt } from "../db.js";
 import { config } from "../config.js";
-import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
+import { requireAppAuth, requireAdmin, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient, HttpError } from "../tg/manager.js";
 import {
   buildPeer,
@@ -267,7 +268,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
 });
 
 /* --------- single + raw + thumb --------- */
-files.get("/files/:id", requireAppAuth, requireAccount, async (req, res, next) => {
+files.get("/files/:id(\\d+|mp_[^/]+)", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) {
       return res.json({ file: serializeMultipart(await loadOwnedMultipart(req)) });
@@ -318,6 +319,56 @@ files.get("/files/:id/download", requireAppAuth, requireAccount, async (req, res
     const client = await getConnectedClient(req.accountId);
     const msg = await getOne(client, peer, req.params.id);
     await streamToResponse(client, msg, req, res, { attachment: true });
+  } catch (e) {
+    if (!res.headersSent) next(e);
+  }
+});
+
+files.get("/files/zip", requireAppAuth, requireAccount, async (req, res, next) => {
+  try {
+    const ids = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: "ids required" });
+    const { row, peer } = await loadFolder(req);
+    const client = await getConnectedClient(req.accountId);
+    const listed = await listMessages(client, peer, { limit: 200 });
+    const messages = new Map(listed.items.map((file) => [String(file.id), file]));
+    const selected = ids.map((id) => messages.get(id)).filter(Boolean);
+    const multipart = ids.filter((id) => isMultipartId(id));
+    for (const id of multipart) {
+      const mp = await stmt.getMultipart(id);
+      if (mp && mp.account_id === req.accountId && mp.peer_json === row.peer_json) selected.push(serializeMultipart(mp));
+    }
+    if (!selected.length) return res.status(404).json({ error: "Files not found" });
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent("selected-files.zip")}`);
+    res.setHeader("Cache-Control", "no-store");
+    const archive = archiver("zip", { zlib: { level: 5 } });
+    archive.on("error", (error) => {
+      if (!res.headersSent) next(error);
+      else res.end();
+    });
+    archive.pipe(res);
+    const used = new Set();
+    for (const file of selected) {
+      try {
+        let buffer;
+        if (file.multipart) {
+          const parts = parseParts(await stmt.getMultipart(file.id));
+          const chunks = [];
+          for (const part of parts) chunks.push(await client.downloadMedia(await getOne(client, peer, part.msgId)));
+          buffer = Buffer.concat(chunks.filter((chunk) => Buffer.isBuffer(chunk)));
+        } else {
+          buffer = await client.downloadMedia(await getOne(client, peer, file.id));
+        }
+        if (!Buffer.isBuffer(buffer) || !buffer.length) continue;
+        let name = safeFilename(file.name || `file_${file.id}`);
+        while (used.has(name)) name = `${Date.now()}-${name}`;
+        used.add(name);
+        archive.append(buffer, { name });
+      } catch {}
+    }
+    await archive.finalize();
   } catch (e) {
     if (!res.headersSent) next(e);
   }
@@ -392,7 +443,7 @@ files.delete("/files", requireAppAuth, requireAccount, async (req, res, next) =>
 });
 
 /* --------- move --------- */
-files.post("/files/move", requireAppAuth, requireAccount, async (req, res, next) => {
+files.post("/files/move", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const { sourceFolderId, destFolderId, ids } = req.body || {};
     if (!sourceFolderId || !destFolderId) return res.status(400).json({ error: "sourceFolderId and destFolderId required" });

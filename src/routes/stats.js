@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { stmt } from "../db.js";
-import { requireAppAuth, requireAccount, canAccessFolder } from "../middleware.js";
+import { requireAppAuth, requireAdmin, requireAccount, canAccessFolder } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
 import { buildPeer, serializeMessage } from "../tg/operations.js";
 import { fmtBytes } from "../util.js";
 
 export const stats = Router();
 
-stats.get("/stats", requireAppAuth, requireAccount, async (req, res, next) => {
+stats.get("/stats", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {
   try {
     const folderIds = [];
     const q = req.query.folder;

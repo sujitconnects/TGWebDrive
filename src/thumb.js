@@ -12,7 +12,15 @@ export function thumbCachePath(key) {
 
 // Generate a small JPEG thumbnail from an image path or buffer.
 export async function generateThumb(input, outPath) {
-  const pipeline = sharp(input, { failOn: "none" }).rotate().resize(480, 480, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 });
+  let source = input;
+  try {
+    source = await sharp(input).rotate().toBuffer();
+  } catch {
+    const heicConvert = (await import("heic-convert")).default;
+    const buffer = Buffer.isBuffer(input) ? input : await fs.promises.readFile(input);
+    source = Buffer.from(await heicConvert({ buffer, format: "JPEG", quality: 0.82 }));
+  }
+  const pipeline = sharp(source, { failOn: "none" }).resize(480, 480, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 });
   if (outPath) {
     await pipeline.toFile(outPath);
     return outPath;

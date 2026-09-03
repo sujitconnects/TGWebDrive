@@ -71,7 +71,7 @@ export function isAudio(mime) {
 
 export function classify(mime, name) {
   const n = (name || "").toLowerCase();
-  if (isImage(mime)) return "image";
+  if (isImage(mime) || /\.(heic|heif)$/.test(n)) return "image";
   if (isVideo(mime)) return "video";
   if (isAudio(mime)) return "audio";
   if (mime === "application/pdf" || n.endsWith(".pdf")) return "pdf";

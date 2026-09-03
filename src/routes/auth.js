@@ -35,7 +35,7 @@ function publicUser(u) {
 auth.get("/auth/state", async (req, res) => {
   const s = await getSession(req);
   const loggedIn = !!s;
-  const accounts = loggedIn ? (await stmt.listAccounts()).map(publicAccount) : [];
+  const accounts = loggedIn ? (await (s.role === "admin" ? stmt.listAccounts() : stmt.accountsForUser(s.userId))).map(publicAccount) : [];
   res.json({
     needsSetup: !(await isSetup()),
     loggedIn,
@@ -68,7 +68,8 @@ auth.post("/auth/login", async (req, res) => {
   const remember = req.body?.remember !== false && req.body?.remember !== "false";
   const user = await stmt.getUserByUsername(username);
   if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Wrong username or password" });
-  await createSession(req, res, { id: user.id, username: user.username, role: user.role }, { remember });
+  const accounts = user.role === "admin" ? await stmt.listAccounts() : await stmt.accountsForUser(user.id);
+  await createSession(req, res, { id: user.id, username: user.username, role: user.role }, { remember, currentAccountId: accounts[0]?.id || null });
   res.json({ ok: true });
 });
 
@@ -145,9 +146,13 @@ auth.delete("/users/:id", requireAppAuth, requireAdmin, async (req, res) => {
 
 auth.post("/auth/tg/request", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
-    const { apiId, apiHash, phone } = req.body || {};
+    const { apiId, apiHash, phone, accountId } = req.body || {};
     if (!apiId || !apiHash || !phone) return res.status(400).json({ error: "apiId, apiHash and phone are required" });
-    res.json(await beginLogin(Number(apiId), String(apiHash), String(phone)));
+    if (accountId) {
+      if (!(await stmt.getAccount(accountId))) return res.status(404).json({ error: "Account not found" });
+      await dropClient(accountId);
+    }
+    res.json(await beginLogin(Number(apiId), String(apiHash), String(phone), accountId || null));
   } catch (e) {
     next(e);
   }
@@ -163,7 +168,7 @@ auth.post("/auth/tg/resend", requireAppAuth, requireAdmin, async (req, res, next
 
 auth.post("/auth/tg/code", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
-    const r = await finishLogin(req.body?.tempToken, req.body?.code, null);
+    const r = await finishLogin(req.body?.tempToken, req.body?.code, null, req.body?.accountId || null);
     if (r.id) await updateSession(req, { currentAccountId: r.id });
     res.json({ ok: true, account: r });
   } catch (e) {
@@ -174,7 +179,7 @@ auth.post("/auth/tg/code", requireAppAuth, requireAdmin, async (req, res, next) 
 
 auth.post("/auth/tg/password", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
-    const r = await finishLogin(req.body?.tempToken, null, req.body?.password);
+    const r = await finishLogin(req.body?.tempToken, null, req.body?.password, req.body?.accountId || null);
     if (r.id) await updateSession(req, { currentAccountId: r.id });
     res.json({ ok: true, account: r });
   } catch (e) {
@@ -189,11 +194,11 @@ auth.post("/auth/tg/cancel", requireAppAuth, requireAdmin, (req, res) => {
 
 /* -------- Accounts -------- */
 
-auth.get("/accounts", requireAppAuth, async (req, res) => {
+auth.get("/accounts", requireAppAuth, requireAdmin, async (req, res) => {
   res.json({ accounts: (await stmt.listAccounts()).map(publicAccount) });
 });
 
-auth.post("/accounts/switch/:id", requireAppAuth, async (req, res) => {
+auth.post("/accounts/switch/:id", requireAppAuth, requireAdmin, async (req, res) => {
   const acc = await stmt.getAccount(req.params.id);
   if (!acc) return res.status(404).json({ error: "Account not found" });
   await updateSession(req, { currentAccountId: req.params.id });
@@ -202,7 +207,7 @@ auth.post("/accounts/switch/:id", requireAppAuth, async (req, res) => {
 
 auth.delete("/accounts/:id", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
-    dropClient(req.params.id);
+    await dropClient(req.params.id);
     await stmt.deleteAccount(req.params.id);
     if (req.session?.currentAccountId === req.params.id) await updateSession(req, { currentAccountId: null });
     res.json({ ok: true });

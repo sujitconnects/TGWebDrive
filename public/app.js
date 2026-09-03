@@ -358,6 +358,7 @@ function renderLogin() {
 
 /* ===================== connect Telegram ===================== */
 function renderConnect() {
+  const reconnectId = state.reconnectAccountId || null;
   const accs = state.accounts
     .map(
       (a) => `<div class="account-pill">${a.premium ? icon("zap", { size: 14, cls: "gold" }) : ""}<b>${esc(a.label)}</b> <span class="muted">${esc(a.phone || a.username || "")}</span></div>`
@@ -377,7 +378,7 @@ function renderConnect() {
     <div class="field"><label>Phone number</label>
       <div class="input-wrap">${icon("phone", { size: 16, cls: "lead" })}<input id="phone" placeholder="+1 555 000 0000" required /></div></div>
     <div class="err" id="err"></div>
-    <button class="primary block" type="submit">${icon("send", { size: 16 })} Send login code</button>
+    <button class="primary block" type="submit">${icon("send", { size: 16 })} ${reconnectId ? "Replace session" : "Send login code"}</button>
     <p class="hint">Get your <b>api_id</b> and <b>api_hash</b> from <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org/apps</a>. Stored only on this server.</p>
   </form>`);
   if (apiPresets.length)
@@ -389,7 +390,7 @@ function renderConnect() {
   $("#connForm").onsubmit = async (e) => {
     e.preventDefault();
     $("#err").textContent = "";
-    const body = { apiId: $("#apiId").value.trim(), apiHash: $("#apiHash").value.trim(), phone: $("#phone").value.trim() };
+    const body = { apiId: $("#apiId").value.trim(), apiHash: $("#apiHash").value.trim(), phone: $("#phone").value.trim(), accountId: reconnectId };
     try {
       const r = await api("/api/auth/tg/request", { method: "POST", body: JSON.stringify(body) });
       renderCodeStep(body, r.tempToken, r.isCodeViaApp);
@@ -422,7 +423,7 @@ function renderCodeStep(creds, tempToken, isCodeViaApp) {
     e.preventDefault();
     $("#err").textContent = "";
     try {
-      await api("/api/auth/tg/code", { method: "POST", body: JSON.stringify({ tempToken, code: $("#code").value.trim() }) });
+      await api("/api/auth/tg/code", { method: "POST", body: JSON.stringify({ tempToken, code: $("#code").value.trim(), accountId: creds.accountId }) });
       finishConnect();
     } catch (err) {
       if (err.status === 449 || err.data?.needPassword) return renderPasswordStep(creds, tempToken);
@@ -442,7 +443,7 @@ function renderPasswordStep(creds, tempToken) {
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api("/api/auth/tg/password", { method: "POST", body: JSON.stringify({ tempToken, password: $("#password").value }) });
+      await api("/api/auth/tg/password", { method: "POST", body: JSON.stringify({ tempToken, password: $("#password").value, accountId: creds.accountId }) });
       finishConnect();
     } catch (err) {
       $("#err").textContent = err.message;
@@ -451,6 +452,7 @@ function renderPasswordStep(creds, tempToken) {
 }
 
 async function finishConnect() {
+  state.reconnectAccountId = null;
   state.auth = await api("/api/auth/state");
   state.user = state.auth.user;
   state.accounts = state.auth.accounts;
@@ -500,13 +502,16 @@ function renderApp() {
 }
 function openNewMenu(anchor) {
   const inFolder = !!state.currentFolder;
-  openMenu(anchor, [
-    { icon: icon("folderPlus", { size: 18 }), label: state.currentFolder ? "New subfolder" : "New folder", onClick: () => newFolder(state.currentFolder) },
-    { icon: icon("hardDriveDownload", { size: 18 }), label: "Import existing channel", onClick: () => importChannelsModal() },
+  const items = [
+    ...(state.user?.isAdmin ? [
+      { icon: icon("folderPlus", { size: 18 }), label: state.currentFolder ? "New subfolder" : "New folder", onClick: () => newFolder(state.currentFolder) },
+      { icon: icon("hardDriveDownload", { size: 18 }), label: "Import existing channel", onClick: () => importChannelsModal() },
+    ] : []),
     { divider: true },
     { icon: icon("uploadCloud", { size: 18 }), label: "Upload files", onClick: () => (inFolder ? pickUpload() : toast("Open a folder first")) },
     { icon: icon("hardDriveDownload", { size: 18 }), label: "Upload folder", onClick: () => (inFolder ? pickUploadFolder() : toast("Open a folder first")) },
-  ]);
+  ];
+  openMenu(anchor, items);
 }
 
 /* Recover folders whose Telegram channels still exist but whose local DB record
@@ -557,7 +562,7 @@ function openAvatarMenu(anchor) {
   openMenu(
     anchor,
     [
-      { icon: icon("settings", { size: 18 }), label: "Settings", onClick: () => openView("settings") },
+      ...(state.user?.isAdmin ? [{ icon: icon("settings", { size: 18 }), label: "Settings", onClick: () => openView("settings") }] : []),
       { icon: icon("logout", { size: 18 }), label: "Log out", danger: true, onClick: logout },
     ],
     { align: "right", header: `<div class="gd-menu-user">${esc(state.user?.username || "")}</div><div class="gd-menu-role">${state.user?.isAdmin ? "admin" : "user"}</div>` }
@@ -587,10 +592,10 @@ function renderSidebar() {
     <div class="sec">My Folders</div>
     ${folders || `<div class="nav-muted">No folders yet</div>`}
     <div class="sec">Library</div>
-    ${libItem("shares", "Share links", "share")}
+    ${isAdmin ? libItem("shares", "Share links", "share") : ""}
     ${isAdmin ? libItem("keys", "API keys", "key") : ""}
     ${isAdmin ? libItem("users", "Users", "users") : ""}
-    ${libItem("settings", "Settings", "settings")}`;
+    ${isAdmin ? libItem("settings", "Settings", "settings") : ""}`;
   $$(".nav-item[data-folder]", nav).forEach((n) => (n.onclick = () => openFolder(n.dataset.folder)));
   $$(".nav-item[data-view]", nav).forEach((n) => (n.onclick = () => openView(n.dataset.view)));
   $$(".nav-more", nav).forEach((btn) => {
@@ -629,6 +634,7 @@ async function openFolder(id) {
   state.selected.clear();
   toggleSidebar(false);
   const f = state.folders.find((x) => x.id === id);
+  const isAdmin = !!state.user?.isAdmin;
   $("#search").value = "";
   $("#search").placeholder = `Search in ${f?.title || "folder"}…`;
   state.search = "";
@@ -645,8 +651,8 @@ async function openFolder(id) {
       })
       .join(`<span class="crumb-sep">${icon("chevronRight", { size: 13 })}</span>`) || `${icon("folder", { size: 18 })} Drive`;
   $("#topActions").innerHTML = `
-    ${f && !f.isSaved ? `<button class="icon-btn" id="renameFolderBtn" title="Rename folder">${icon("pencil")}</button><button class="icon-btn" id="deleteFolderBtn" title="Delete folder">${icon("trash")}</button>` : ""}
-    <button class="icon-btn" id="shareFolderBtn" title="Share whole folder">${icon("share")}</button>
+    ${isAdmin && f && !f.isSaved ? `<button class="icon-btn" id="renameFolderBtn" title="Rename folder">${icon("pencil")}</button><button class="icon-btn" id="deleteFolderBtn" title="Delete folder">${icon("trash")}</button>` : ""}
+    ${isAdmin ? `<button class="icon-btn" id="shareFolderBtn" title="Share whole folder">${icon("share")}</button>` : ""}
     <button class="icon-btn" id="sortBtn" title="Sort">${icon("arrowUpDown", { size: 18 })}</button>
     <button class="icon-btn" id="viewToggle" title="Toggle view">${icon(state.view === "grid" ? "list" : "grid")}</button>`;
   $("#viewToggle").onclick = () => {
@@ -655,9 +661,9 @@ async function openFolder(id) {
     $("#viewToggle").innerHTML = icon(state.view === "grid" ? "list" : "grid");
     renderFiles();
   };
-  $("#shareFolderBtn").onclick = () => shareFolderModal(f);
+  if (isAdmin) $("#shareFolderBtn").onclick = () => shareFolderModal(f);
   $("#sortBtn").onclick = (e) => openSortMenu(e.currentTarget);
-  if (f && !f.isSaved) {
+  if (isAdmin && f && !f.isSaved) {
     $("#renameFolderBtn").onclick = () => renameFolder(f.id);
     $("#deleteFolderBtn").onclick = () => deleteFolder(f.id);
   }
@@ -735,9 +741,10 @@ function renderSubfolders() {
   renderFiles();
 }
 function folderCard(f) {
+  const isAdmin = !!state.user?.isAdmin;
   return `<div class="card folder-card" data-folder="${f.id}" title="${esc(f.title)}">
     <div class="card-actions">
-      ${f.isSaved ? "" : `<button class="ca-btn" title="Rename folder" onclick="event.stopPropagation();renameFolder('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn danger" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${f.id}')">${icon("trash", { size: 15 })}</button>`}
+      ${isAdmin && !f.isSaved ? `<button class="ca-btn" title="Rename folder" onclick="event.stopPropagation();renameFolder('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn danger" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${f.id}')">${icon("trash", { size: 15 })}</button>` : ""}
     </div>
     <div class="fcard-ic">${icon(f.kind === "saved" ? "inbox" : "folder", { size: 40 })}</div>
     <div class="meta"><div class="nm" title="${esc(f.title)}">${esc(f.title)}</div><div class="sz">Folder</div></div>
@@ -749,6 +756,7 @@ function wireFolderCards(scope) {
     n.onclick = () => openFolder(folderId);
     
     // Drop support for folders
+    if (!state.user?.isAdmin) return;
     n.ondragover = (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
@@ -807,12 +815,12 @@ function renderFiles() {
   const bulkModeBtn = state.selected.size === 0 ? `<button class="btn-2 ${state.bulkMode ? "" : "ghost"}" onclick="toggleBulkMode()" title="Toggle bulk select mode">${icon("check", { size: 14 })} ${state.bulkMode ? "Bulk Mode ON" : "Bulk Mode"}</button>` : "";
   const toolbar = `<div class="toolbar-row">${selInfo}${selAllBtn}<div class="spacer"></div>${bulkModeBtn}${
     state.selected.size
-      ? `<button class="btn-2" onclick="downloadSelected()">${icon("download", { size: 15 })} Download</button><button class="btn-2" onclick="moveSelected()">${icon("send", { size: 15 })} Move</button><button class="btn-2" onclick="shareSelected()">${icon("share", { size: 15 })} Share</button><button class="btn-2 danger" onclick="deleteSelected()">${icon("trash", { size: 15 })} Delete</button><button class="btn-2 ghost" onclick="clearSelection()">Clear</button>`
+      ? `<button class="btn-2" onclick="downloadSelected()">${icon("download", { size: 15 })} Download</button>${state.user?.isAdmin ? `<button class="btn-2" onclick="moveSelected()">${icon("send", { size: 15 })} Move</button><button class="btn-2" onclick="shareSelected()">${icon("share", { size: 15 })} Share</button>` : ""}<button class="btn-2 danger" onclick="deleteSelected()">${icon("trash", { size: 15 })} Delete</button><button class="btn-2 ghost" onclick="clearSelection()">Clear</button>`
       : ``
   }</div>`;
   const partBadge = (f) => (f.multipart ? `<span class="mp-badge" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 11 })} ${f.partsCount}</span>` : "");
   const rowActions = (id) =>
-    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
+    `<div class="row-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${id}')">${icon("pencil", { size: 15 })}</button>${state.user?.isAdmin ? `<button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${id}')">${icon("share", { size: 15 })}</button>` : ""}<button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${id}')">${icon("trash", { size: 15 })}</button></div>`;
   const list =
     state.view === "grid"
       ? `<div class="grid">${state.files.map(fileCard).join("")}</div>`
@@ -841,7 +849,7 @@ function renderFiles() {
       toggleSelect(id);
     };
     // Drag support for files
-    node.draggable = true;
+    node.draggable = !!state.user?.isAdmin;
     node.ondragstart = (e) => {
       if (!state.selected.has(selKey(id))) toggleSelect(id);
       const ids = state.files.filter((f) => state.selected.has(selKey(f.id))).map((f) => f.id);
@@ -852,12 +860,13 @@ function renderFiles() {
 }
 
 function fileCard(f) {
+  const isAdmin = !!state.user?.isAdmin;
   const sel = state.selected.has(selKey(f.id)) ? "selected" : "";
   const showImg = f.kind === "image" || f.kind === "video";
   const thumb = `${fileIcon(f.kind, 40)}${showImg ? `<img class="thumb-img" loading="lazy" src="/api/files/${f.id}/thumb?folder=${state.currentFolder}" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()" alt="" />` : ""}`;
   const badge = f.kind === "video" ? `<span class="play-badge">${icon("play", { size: 12 })}</span>` : "";
   const mpTag = f.multipart ? `<span class="mp-tag" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 12 })} ${f.partsCount} parts</span>` : "";
-  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${f.id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button><button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
+  const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button>${isAdmin ? `<button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${f.id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button>` : ""}<button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
   return `<div class="card ${sel}" data-id="${f.id}">
     <div class="card-sel" onclick="event.stopPropagation();toggleSelect('${f.id}')" style="cursor: pointer;">${icon("check", { size: 13 })}</div>
     ${actions}
@@ -899,6 +908,7 @@ window.downloadFileById = (id) => {
   if (f) downloadFile(f);
 };
 window.shareById = (id) => {
+  if (!state.user?.isAdmin) return toast("Admin only");
   const f = fileById(id);
   if (f) shareModal(f);
 };
@@ -920,15 +930,26 @@ window.deleteFileById = async (id) => {
   }
 };
 window.moveFileById = async (id) => {
+  if (!state.user?.isAdmin) return toast("Admin only");
   const f = fileById(id);
   if (f) moveModal([f.id]);
 };
 window.moveSelected = async () => {
+  if (!state.user?.isAdmin) return toast("Admin only");
   if (!state.selected.size) return;
   const ids = state.files.filter((f) => state.selected.has(selKey(f.id))).map((f) => f.id);
   moveModal(ids);
 };
-window.downloadSelected = () => state.files.filter((f) => state.selected.has(selKey(f.id))).forEach(downloadFile);
+window.downloadSelected = () => {
+  const ids = state.files.filter((f) => state.selected.has(selKey(f.id))).map((f) => f.id);
+  if (!ids.length || !state.currentFolder) return;
+  const a = document.createElement("a");
+  a.href = `/api/files/zip?folder=${encodeURIComponent(state.currentFolder)}&ids=${encodeURIComponent(ids.join(","))}`;
+  a.download = "selected-files.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
 window.deleteSelected = async () => {
   if (!(await uiConfirm(`${state.selected.size} file(s) will be permanently deleted from Telegram.`, { title: "Delete files?", okText: "Delete", danger: true, icon: icon("trash", { size: 20 }) }))) return;
   try {
@@ -941,6 +962,7 @@ window.deleteSelected = async () => {
   }
 };
 window.shareSelected = () => {
+  if (!state.user?.isAdmin) return toast("Admin only");
   const files = state.files.filter((x) => state.selected.has(selKey(x.id)));
   if (!files.length) return;
   if (files.length === 1) {
@@ -964,10 +986,11 @@ function previewFile(id) {
   const f = state.files.find((x) => String(x.id) === String(id));
   if (!f) return;
   const url = `/api/files/${f.id}/raw?folder=${state.currentFolder}`;
+  const previewUrl = /\.(heic|heif)$/i.test(f.name || f.caption || "") ? `/api/files/${f.id}/thumb?folder=${state.currentFolder}` : url;
   let body = "";
   // Split files can't be seeked inline, so skip rich preview and offer download.
   if (f.multipart) body = "";
-  else if (f.kind === "image") body = `<img src="${url}" alt="" />`;
+  else if (f.kind === "image") body = `<img src="${previewUrl}" alt="" />`;
   else if (f.kind === "video") body = `<video src="${url}" controls autoplay></video>`;
   else if (f.kind === "audio") body = `<div class="audio-wrap">${fileIcon("audio", 56)}<audio src="${url}" controls autoplay></audio></div>`;
   else if (f.kind === "pdf") body = `<iframe class="pdf" src="${url}"></iframe>`;
@@ -984,7 +1007,7 @@ function previewFile(id) {
         <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
         <div class="spacer"></div>
         ${capBtn}
-        <button class="btn-2" onclick="shareModal(window.__pf)">${icon("share", { size: 15 })} Share</button>
+        ${state.user?.isAdmin ? `<button class="btn-2" onclick="shareModal(window.__pf)">${icon("share", { size: 15 })} Share</button>` : ""}
         <button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 15 })} Download</button>
       </div>
     </div></div>`);
@@ -1881,7 +1904,7 @@ document.addEventListener("drop", async (e) => {
   enqueueFiles([...(e.dataTransfer.files || [])], folderId);
 });
 function kindOf(mime, name) {
-  if (mime?.startsWith("image/")) return "image";
+  if (mime?.startsWith("image/") || /\.(heic|heif)$/i.test(name || "")) return "image";
   if (mime?.startsWith("video/")) return "video";
   if (mime?.startsWith("audio/")) return "audio";
   if (mime === "application/pdf" || name?.endsWith(".pdf")) return "pdf";
@@ -1971,11 +1994,18 @@ function folderChain(id) {
 /* ===================== accounts ===================== */
 async function addAccount() {
   if (!state.user?.isAdmin) return toast("Only admins can connect accounts");
+  state.reconnectAccountId = null;
   state.currentFolder = null;
   state.accounts = [];
   renderConnect();
 }
 window.addAccount = addAccount;
+async function reconnectAccount(id) {
+  if (!state.user?.isAdmin) return toast("Only admins can reconnect accounts");
+  state.reconnectAccountId = id;
+  renderConnect();
+}
+window.reconnectAccount = reconnectAccount;
 async function logout() {
   await api("/api/auth/logout", { method: "POST" });
   location.reload();
@@ -1984,6 +2014,7 @@ window.logout = logout;
 
 /* ===================== views: shares / keys / settings ===================== */
 async function openView(v) {
+  if (!state.user?.isAdmin) return toast("Admin only");
   state.currentFolder = null;
   state.currentView = v;
   toggleSidebar(false);
@@ -2083,6 +2114,7 @@ function viewSettings() {
       <div class="kv-ic">${a.premium ? icon("zap", { size: 16, cls: "gold" }) : icon("user", { size: 16 })}</div>
       <div class="info"><div class="t">${esc(a.label)} ${a.id === state.currentAccountId ? '<span class="tag">active</span>' : ""}</div><div class="s">${esc(a.phone || a.username || "")}</div></div>
       ${a.id !== state.currentAccountId ? `<button class="btn-2" onclick="switchAcc('${a.id}')">Switch</button>` : ""}
+      ${isAdmin ? `<button class="btn-2" onclick="reconnectAccount('${a.id}')">${icon("refresh", { size: 14 })} Reconnect</button>` : ""}
       ${isAdmin ? `<button class="icon-btn danger" title="Remove" onclick="delAcc('${a.id}')">${icon("trash", { size: 16 })}</button>` : ""}
     </div>`);
   const brandLogoPreview = brand.logo
@@ -2389,9 +2421,10 @@ async function renderPublicShare(id) {
     const raw = `/s/${id}/raw${tParam(token)}`;
     const thumb = `/s/${id}/thumb${tParam(token)}`;
     const kind = kindOf(s.mime, s.name);
+    const previewUrl = /\.(heic|heif)$/i.test(s.name || "") || /image\/(heic|heif)/i.test(s.mime || "") ? thumb : raw;
     let preview = "";
     if (kind === "image")
-      preview = `<div class="pub-preview img"><img src="${raw}" alt="${esc(s.name)}" onerror="this.closest('.pub-preview').classList.add('broken')" /></div>`;
+      preview = `<div class="pub-preview img"><img src="${previewUrl}" alt="${esc(s.name)}" onerror="this.closest('.pub-preview').classList.add('broken')" /></div>`;
     else if (kind === "video")
       preview = `<div class="pub-preview video"><video src="${raw}" controls playsinline preload="metadata" poster="${thumb}"></video><span class="pub-vbadge">${icon("film", { size: 13 })} Video</span></div>`;
     else if (kind === "audio")
