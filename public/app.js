@@ -669,6 +669,7 @@ async function openFolder(id) {
   }
   await loadFiles(true);
 }
+window.openFolder = openFolder;
 
 function content() {
   return $("#content");
