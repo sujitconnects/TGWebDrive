@@ -25,6 +25,7 @@ import {
 import { publish, subscribe, finish, fail } from "../jobs.js";
 import { uid, safeFilename } from "../util.js";
 import { generateThumb, IMAGE_RE } from "../thumb.js";
+import { hasDuplicateNameSize, findDuplicateItems } from "../duplicate.js";
 
 export const files = Router();
 
@@ -95,6 +96,33 @@ files.get("/files", requireAppAuth, requireAccount, async (req, res, next) => {
   }
 });
 
+async function listAllFolderEntries(client, peer) {
+  const items = [];
+  let offsetId = 0;
+  while (true) {
+    const r = await listMessages(client, peer, { limit: 200, offsetId });
+    items.push(...(r.items || []));
+    if (!r.nextOffset) break;
+    offsetId = r.nextOffset;
+  }
+  return items;
+}
+
+files.get("/files/duplicates", requireAppAuth, requireAccount, async (req, res, next) => {
+  try {
+    const { row, peer } = await loadFolder(req);
+    const client = await getConnectedClient(req.accountId);
+    const entries = await listAllFolderEntries(client, peer);
+    const multipart = await stmt.listMultipart(req.accountId, row.peer_json);
+    const all = entries.concat(multipart.map((mp) => serializeMultipart(mp)));
+    const duplicates = findDuplicateItems(all.map((file) => ({ name: file.caption || file.name, size: Number(file.size) || 0, id: file.id })));
+    const ids = [...new Set(duplicates.flat().map((item) => String(item.id)))];
+    res.json({ duplicates: ids, groups: duplicates.map((group) => group.map((item) => ({ id: item.id, name: item.name || item.caption || "file", size: Number(item.size) || 0 }))) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 /* --------- upload progress (SSE) --------- */
 files.get("/files/upload/progress", requireAppAuth, (req, res) => {
   const job = String(req.query.job || "");
@@ -132,6 +160,13 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     const size = Number(req.headers["x-filesize"] || 0);
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
+
+    const existing = await listAllFolderEntries(client, peer);
+    const multipart = await stmt.listMultipart(req.accountId, row.peer_json);
+    const allExisting = existing.concat(multipart.map((mp) => serializeMultipart(mp)));
+    if (hasDuplicateNameSize({ name: fileName, size }, allExisting)) {
+      throw new HttpError(409, `A file named “${fileName}” with the same size already exists in this folder.`);
+    }
 
     upDir = fs.mkdtempSync("/tmp/tgd-up-");
     tmp = `${upDir}/${fileName}`;

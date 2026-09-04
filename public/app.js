@@ -726,6 +726,38 @@ const SORT_OPTIONS = {
   size: { label: "Size", get: (f) => Number(f.size) || 0 },
   type: { label: "Type", get: (f) => f.ext || f.kind || "" },
 };
+function duplicateMetaKey(name, size) {
+  return `${String(name || "").trim().replace(/[\\/]/g, "").replace(/\s+/g, " ").toLowerCase()}::${Number(size) || 0}`;
+}
+function findDuplicateFilesInFolder(items = state.files) {
+  const map = new Map();
+  const rows = items.filter((file) => file && (file.name || file.caption || file.id));
+  for (const file of rows) {
+    const fingerprint = duplicateMetaKey(file.caption || file.name, Number(file.size) || 0);
+    if (!fingerprint || fingerprint.endsWith("::0")) continue;
+    if (!map.has(fingerprint)) map.set(fingerprint, []);
+    map.get(fingerprint).push(file);
+  }
+  return [...map.values()].filter((group) => group.length > 1);
+}
+function setDuplicateSelectionFromServer() {
+  if (!state.currentFolder) return;
+  api(`/api/files/duplicates?folder=${state.currentFolder}`)
+    .then((r) => {
+      const ids = new Set((r.duplicates || []).map((id) => String(id)));
+      if (!ids.size) {
+        toast("No duplicates found in this folder.");
+        return;
+      }
+      state.selected.clear();
+      for (const file of state.files) {
+        if (ids.has(String(file.id))) state.selected.add(selKey(file.id));
+      }
+      renderFiles();
+      toast(`${ids.size} duplicate file(s) found in this folder.`);
+    })
+    .catch(() => toast("Duplicate scan failed for this folder."));
+}
 function sortFiles() {
   const { get } = SORT_OPTIONS[state.sortBy] || SORT_OPTIONS.date;
   const dir = state.sortDir === "asc" ? 1 : -1;
@@ -837,8 +869,9 @@ function renderFiles() {
   const selInfo = state.selected.size ? `<span class="sel-info">${icon("check", { size: 13 })} ${state.selected.size} selected</span>` : "";
   const allSel = state.files.length && state.selected.size === state.files.length;
   const selAllBtn = `<button class="btn-2 ghost" onclick="toggleSelectAll()">${allSel ? icon("x", { size: 14 }) + " Clear all" : icon("check", { size: 14 }) + " Select all"}</button>`;
+  const dupBtn = `<button class="btn-2 ghost" onclick="setDuplicateSelectionFromServer()">${icon("copy", { size: 14 })} Find duplicates</button>`;
   const bulkModeBtn = state.selected.size === 0 ? `<button class="btn-2 ${state.bulkMode ? "" : "ghost"}" onclick="toggleBulkMode()" title="Toggle bulk select mode">${icon("check", { size: 14 })} ${state.bulkMode ? "Bulk Mode ON" : "Bulk Mode"}</button>` : "";
-  const toolbar = `<div class="toolbar-row">${selInfo}${selAllBtn}<div class="spacer"></div>${bulkModeBtn}${
+  const toolbar = `<div class="toolbar-row">${selInfo}${selAllBtn}${dupBtn}<div class="spacer"></div>${bulkModeBtn}${
     state.selected.size
       ? `<button class="btn-2" onclick="downloadSelected()">${icon("download", { size: 15 })} Download</button>${state.user?.isAdmin ? `<button class="btn-2" onclick="moveSelected()">${icon("send", { size: 15 })} Move</button><button class="btn-2" onclick="shareSelected()">${icon("share", { size: 15 })} Share</button>` : ""}<button class="btn-2 danger" onclick="deleteSelected()">${icon("trash", { size: 15 })} Delete</button><button class="btn-2 ghost" onclick="clearSelection()">Clear</button>`
       : ``
@@ -896,16 +929,18 @@ function renderFiles() {
 function fileCard(f) {
   const isAdmin = !!state.user?.isAdmin;
   const sel = state.selected.has(selKey(f.id)) ? "selected" : "";
+  const duplicateGroup = findDuplicateFilesInFolder(state.files).find((group) => group.some((item) => String(item.id) === String(f.id)));
+  const duplicateTag = duplicateGroup ? `<span class="dup-tag">Duplicate</span>` : "";
   const showImg = f.kind === "image" || f.kind === "video";
   const thumb = `${fileIcon(f.kind, 40)}${showImg ? `<img class="thumb-img" loading="lazy" src="/api/files/${f.id}/thumb?folder=${state.currentFolder}" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()" alt="" />` : ""}`;
   const badge = f.kind === "video" ? `<span class="play-badge">${icon("play", { size: 12 })}</span>` : "";
   const mpTag = f.multipart ? `<span class="mp-tag" title="${f.partsCount} parts · reassembles on download">${icon("layers", { size: 12 })} ${f.partsCount} parts</span>` : "";
   const actions = `<div class="card-actions"><button class="ca-btn" title="Download" onclick="event.stopPropagation();downloadFileById('${f.id}')">${icon("download", { size: 15 })}</button><button class="ca-btn" title="Rename" onclick="event.stopPropagation();renameById('${f.id}')">${icon("pencil", { size: 15 })}</button>${isAdmin ? `<button class="ca-btn" title="Move" onclick="event.stopPropagation();moveFileById('${f.id}')">${icon("send", { size: 15 })}</button><button class="ca-btn" title="Share" onclick="event.stopPropagation();shareById('${f.id}')">${icon("share", { size: 15 })}</button>` : ""}<button class="ca-btn danger" title="Delete" onclick="event.stopPropagation();deleteFileById('${f.id}')">${icon("trash", { size: 15 })}</button></div>`;
-  return `<div class="card ${sel}" data-id="${f.id}">
+  return `<div class="card ${sel} ${duplicateGroup ? "dup" : ""}" data-id="${f.id}">
     <div class="card-sel" onclick="event.stopPropagation();toggleSelect('${f.id}')" style="cursor: pointer;">${icon("check", { size: 13 })}</div>
     ${actions}
     <div class="thumb">${thumb}${badge}</div>
-    <div class="meta"><div class="nm" title="${esc(f.caption || f.name)}">${esc(f.caption || f.name)}</div><div class="sz">${fmtSize(f.size)} · ${fmtDate(f.date)}${mpTag}</div></div>
+    <div class="meta"><div class="nm" title="${esc(f.caption || f.name)}">${esc(f.caption || f.name)}${duplicateTag}</div><div class="sz">${fmtSize(f.size)} · ${fmtDate(f.date)}${mpTag}</div></div>
   </div>`;
 }
 
@@ -932,6 +967,7 @@ window.toggleSelectAll = () => {
   else state.files.forEach((f) => state.selected.add(selKey(f.id)));
   renderFiles();
 };
+window.setDuplicateSelectionFromServer = setDuplicateSelectionFromServer;
 window.toggleBulkMode = () => {
   state.bulkMode = !state.bulkMode;
   renderFiles();
@@ -1601,9 +1637,16 @@ function addUploadTask({ file, name, folderId }) {
   return t;
 }
 function enqueueFiles(fileList, folderId) {
+  const existing = [...state.files, ...up.queue.filter((item) => item.folderId === folderId).map((item) => ({ name: item.name, size: Number(item.size) || 0 }))];
   let n = 0;
   for (const file of fileList) {
+    const dup = existing.some((item) => duplicateMetaKey(item.name || file.name, Number(item.size) || 0) === duplicateMetaKey(file.name, Number(file.size) || 0));
+    if (dup) {
+      toast(`Skipped duplicate: ${file.name}`);
+      continue;
+    }
     addUploadTask({ file, name: file.name, folderId });
+    existing.push({ name: file.name, size: Number(file.size) || 0 });
     n++;
   }
   return n;

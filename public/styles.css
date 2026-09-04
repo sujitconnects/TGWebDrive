@@ -269,6 +269,8 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
 @media (hover: none) { .card-actions, .row-actions { opacity: 1; } }
 .meta { padding: 9px 11px; }
 .meta .nm { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta .nm .dup-tag { display: inline-flex; align-items: center; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: rgba(240, 85, 106, 0.12); color: var(--danger); font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; vertical-align: middle; }
+.card.dup { border-color: rgba(240, 85, 106, 0.45); box-shadow: 0 0 0 1px rgba(240, 85, 106, 0.2) inset; }
 .meta .sz { font-size: 11px; color: var(--muted); margin-top: 1px; }
 
 /* list */
@@ -499,19 +501,20 @@ a.pub-btn.sm:hover { border-color: var(--accent); color: var(--accent); }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); overflow: hidden; display: flex; flex-direction: column;
   font-size: 13px;
 }
-.upd-head { display: flex; align-items: center; gap: 12px; padding: 11px 12px; cursor: pointer; background: var(--bg-3); border-bottom: 1px solid var(--border); }
+.upd-head { display: flex; align-items: center; gap: 12px; padding: 11px 12px; cursor: pointer; background: var(--bg-3); border-bottom: 1px solid var(--border); min-width: 0; }
 .upd-head:hover { background: var(--bg-2); }
-.upd-title { display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; }
+.upd-title { display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.upd-title > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .upd-title .ic.ok-ic { color: var(--ok); }
 .upd-spinner { width: 16px; height: 16px; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; flex: none; }
-.upd-overall { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.upd-bar { flex: 1; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+.upd-overall { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.upd-bar { flex: 1; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); min-width: 0; }
 .upd-bar > div { height: 100%; background: var(--accent); width: 0; min-width: 8%; transition: width 0.25s ease-out; }
 .upd-pct { font-size: 11.5px; color: var(--muted); width: 34px; text-align: right; flex: none; }
-.upd-btns { display: flex; align-items: center; gap: 2px; flex: none; }
+.upd-btns { display: flex; align-items: center; gap: 2px; flex: none; min-width: 0; }
 .upd-x, .upd-chev { background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 7px; display: grid; place-items: center; }
 .upd-x:hover, .upd-chev:hover { color: var(--text); background: var(--bg); }
-.upd-cancelall { background: none; border: none; color: var(--muted); cursor: pointer; padding: 5px 9px; border-radius: 7px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.upd-cancelall { background: none; border: none; color: var(--muted); cursor: pointer; padding: 5px 9px; border-radius: 7px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0; }
 .upd-cancelall:hover { color: var(--danger); background: rgba(240, 85, 106, 0.12); }
 .upd-chev .ic { transition: transform 0.2s; }
 .upd-chev .ic.down { transform: rotate(90deg); }

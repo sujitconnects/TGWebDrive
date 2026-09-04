@@ -3,20 +3,44 @@ import { StringSession } from "telegram/sessions/index.js";
 import { stmt } from "../db.js";
 import { uid } from "../util.js";
 
-const OPTS = { connectionRetries: 5, useWSS: true, retryDelay: 1000, autoReconnect: true };
+// In self-hosted or restricted networks, forcing WSS often triggers the repeated
+// update-loop TIMEOUTs seen with Telegram's long-polling connection. Falling back
+// to the plain TCP path is noticeably more stable for local/proxied installs.
+const OPTS = { connectionRetries: 5, requestRetries: 5, useWSS: false, retryDelay: 2000, autoReconnect: true };
 
 // accountId -> { client, promise, lastUsed }
 const clients = new Map();
 // tempToken -> { client, apiId, apiHash, phone, phoneCodeHash, createdAt }
 const logins = new Map();
 
+function reconnectClient(client, label = "telegram") {
+  if (!client || client.connected) return Promise.resolve(client);
+  return connect(client).catch((e) => {
+    console.warn(`[tg] reconnect failed for ${label}:`, e?.message || e);
+    return null;
+  });
+}
+
 function buildSession(sessionStr, apiId, apiHash) {
-  return new TelegramClient(new StringSession(sessionStr || ""), apiId, apiHash, OPTS);
+  const client = new TelegramClient(new StringSession(sessionStr || ""), apiId, apiHash, OPTS);
+  try {
+    client.on?.("disconnect", () => {
+      console.warn("[tg] socket disconnected; reconnect scheduled");
+      setTimeout(() => reconnectClient(client, "session").catch(() => {}), 1500);
+    });
+  } catch {}
+  return client;
 }
 
 async function connect(c) {
-  if (!c.connected) await c.connect();
-  return c;
+  try {
+    if (!c.connected) await c.connect();
+    return c;
+  } catch (e) {
+    console.warn("[tg] connect failed:", e?.message || e);
+    try { await c.disconnect(); } catch {}
+    throw e;
+  }
 }
 
 export async function getConnectedClient(accountId) {
@@ -25,7 +49,7 @@ export async function getConnectedClient(accountId) {
     entry.lastUsed = Date.now();
     if (entry.promise) return entry.promise;
     try {
-      if (!entry.client.connected) await entry.client.connect();
+      if (!entry.client.connected) await connect(entry.client);
       return entry.client;
     } catch (e) {
       clients.delete(accountId);

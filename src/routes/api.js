@@ -14,6 +14,7 @@ import {
   streamToResponse,
 } from "../tg/operations.js";
 import { tempPath, safeFilename, uid, token } from "../util.js";
+import { hasDuplicateNameSize } from "../duplicate.js";
 
 export const api = Router();
 export const keys = Router();
@@ -76,6 +77,13 @@ api.post("/v1/files", requireApiKey, async (req, res, next) => {
     const size = Number(req.headers["x-filesize"] || 0);
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
+
+    const listed = await listMessages(client, peer, { limit: 200 });
+    const existing = listed.items || [];
+    if (hasDuplicateNameSize({ name: fileName, size }, existing)) {
+      throw new HttpError(409, `A file named “${fileName}” with the same size already exists in this folder.`);
+    }
+
     upDir = fs.mkdtempSync("/tmp/tgd-api-");
     tmp = `${upDir}/${fileName}`;
     await new Promise((resolve, reject) => {
