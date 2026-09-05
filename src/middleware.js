@@ -1,6 +1,8 @@
 import { metaGet, metaSet, stmt } from "./db.js";
 import { verifyPassword, token } from "./util.js";
 
+const unlockedFolders = new Map();
+
 // Sessions are persisted in SQLite so server restarts no longer log people out.
 // A "remember me" login opts into the longer-lived cookie/session.
 const TTL_REMEMBER = 1000 * 60 * 60 * 24 * 90; // 90 days
@@ -75,7 +77,10 @@ export async function updateSession(req, patch) {
 
 export async function destroySession(req, res) {
   const sid = req.cookies?.sid;
-  if (sid) await stmt.deleteSession(sid);
+  if (sid) {
+    unlockedFolders.delete(sid);
+    await stmt.deleteSession(sid);
+  }
   res.clearCookie("sid", { path: "/" });
 }
 
@@ -115,8 +120,21 @@ export async function requireAccount(req, res, next) {
   }
 }
 
-export function canAccessFolder(req, folderId) {
-  return req.user?.role === "admin" || !req.allowedFolderIds || req.allowedFolderIds.has(String(folderId));
+export function canAccessFolder(req, folderId, folder = null) {
+  const assigned = req.user?.role === "admin" || !req.allowedFolderIds || req.allowedFolderIds.has(String(folderId));
+  if (!assigned || !folder?.pin_hash) return assigned;
+  return unlockedFolders.get(req.session?.sid)?.has(String(folderId)) || false;
+}
+
+export function unlockFolder(req, folderId) {
+  const sid = req.session?.sid;
+  if (!sid) return;
+  if (!unlockedFolders.has(sid)) unlockedFolders.set(sid, new Set());
+  unlockedFolders.get(sid).add(String(folderId));
+}
+
+export function lockFolder(req, folderId) {
+  unlockedFolders.get(req.session?.sid)?.delete(String(folderId));
 }
 
 export { metaGet, metaSet, verifyPassword };

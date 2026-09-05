@@ -58,7 +58,7 @@ async function loadFolder(req) {
   const folderId = req.query.folder || req.headers["x-folder"];
   if (!folderId) throw new HttpError(400, "Missing folder");
   const row = await stmt.getFolder(folderId, req.accountId);
-  if (!row || !canAccessFolder(req, row.id)) throw new HttpError(404, "Folder not found");
+  if (!row || !canAccessFolder(req, row.id, row)) throw new HttpError(403, "Folder is locked");
   return { row, peer: buildPeer(row) };
 }
 

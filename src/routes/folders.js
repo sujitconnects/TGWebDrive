@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { stmt } from "../db.js";
-import { requireAppAuth, requireAccount, requireAdmin, canAccessFolder } from "../middleware.js";
+import { requireAppAuth, requireAccount, requireAdmin, canAccessFolder, lockFolder, unlockFolder } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
 import { buildPeer, createChannelFolder, renameChannelFolder, deleteChannelFolder, listDialogs, SAVED_PEER } from "../tg/operations.js";
-import { uid } from "../util.js";
+import { hashPassword, uid, verifyPassword } from "../util.js";
 
 export const folders = Router();
 
@@ -31,6 +31,7 @@ folders.get("/folders", requireAppAuth, requireAccount, async (req, res) => {
     title: f.title,
     kind: f.kind,
     isSaved: f.kind === "saved",
+    isLocked: !!f.pin_hash,
     parentId: f.parent_id || null,
   }));
   res.json({ folders: list });
@@ -103,6 +104,33 @@ folders.patch("/folders/:id", requireAppAuth, requireAdmin, requireAccount, asyn
   } catch (e) {
     next(e);
   }
+});
+
+folders.put("/folders/:id/pin", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
+  const pin = String(req.body?.pin || "");
+  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: "PIN must be exactly 4 digits" });
+  const row = await stmt.getFolder(req.params.id, req.accountId);
+  if (!row || row.kind === "saved") return res.status(404).json({ error: "Folder not found" });
+  await stmt.setFolderPin(row.id, req.accountId, hashPassword(pin));
+  lockFolder(req, row.id);
+  res.json({ ok: true });
+});
+
+folders.delete("/folders/:id/pin", requireAppAuth, requireAdmin, requireAccount, async (req, res) => {
+  const row = await stmt.getFolder(req.params.id, req.accountId);
+  if (!row || row.kind === "saved") return res.status(404).json({ error: "Folder not found" });
+  await stmt.setFolderPin(row.id, req.accountId, null);
+  lockFolder(req, row.id);
+  res.json({ ok: true });
+});
+
+folders.post("/folders/:id/unlock", requireAppAuth, requireAccount, async (req, res) => {
+  const row = await stmt.getFolder(req.params.id, req.accountId);
+  const assigned = req.user?.role === "admin" || !req.allowedFolderIds || req.allowedFolderIds.has(String(req.params.id));
+  if (!row || !assigned) return res.status(404).json({ error: "Folder not found" });
+  if (!row.pin_hash || !verifyPassword(String(req.body?.pin || ""), row.pin_hash)) return res.status(403).json({ error: "Incorrect PIN" });
+  unlockFolder(req, row.id);
+  res.json({ ok: true });
 });
 
 folders.delete("/folders/:id", requireAppAuth, requireAdmin, requireAccount, async (req, res, next) => {

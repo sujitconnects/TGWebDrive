@@ -145,11 +145,11 @@ function uiConfirm(message, { title = "Please confirm", okText = "Confirm", canc
     );
   });
 }
-function uiPrompt({ label = "", placeholder = "", value = "", title = "", okText = "OK", multiline = false, validate } = {}) {
+function uiPrompt({ label = "", placeholder = "", value = "", title = "", okText = "OK", multiline = false, type = "text", validate } = {}) {
   return new Promise((resolve) => {
     const field = multiline
       ? `<textarea id="pIn" rows="4" placeholder="${esc(placeholder)}">${esc(value)}</textarea>`
-      : `<input id="pIn" placeholder="${esc(placeholder)}" value="${esc(value)}" />`;
+      : `<input id="pIn" type="${esc(type)}" placeholder="${esc(placeholder)}" value="${esc(value)}" />`;
     const card = el(`<div class="modal card-modal gd-dialog">
       <div class="gd-dialog-body">${title ? `<div class="gd-dlg-title">${esc(title)}</div>` : ""}${label ? `<div class="gd-dlg-msg">${esc(label)}</div>` : ""}<div class="gd-dlg-field">${field}</div><div class="err" id="pErr"></div></div>
       <div class="gd-dialog-actions"><button class="btn-2" id="gdNo">Cancel</button><button class="primary" id="gdYes">${esc(okText)}</button></div>
@@ -580,7 +580,7 @@ function renderSidebar() {
     .filter((f) => !f.parentId)
     .map((f) => {
       const active = state.currentFolder === f.id;
-      const ic = f.kind === "saved" ? "inbox" : "folder";
+      const ic = f.kind === "saved" ? "inbox" : f.isLocked ? "lock" : "folder";
       const more = f.kind === "saved" ? "" : `<button class="nav-more" data-more="${f.id}" title="Folder options">${icon("moreH", { size: 15 })}</button>`;
       return `<div class="nav-item ${active ? "active" : ""}" data-folder="${f.id}" title="${esc(f.title)}">
         ${icon(ic, { size: 18 })}<span class="nm">${esc(f.title)}</span>${active ? icon("check", { size: 14, cls: "ml" }) : ""}${more}</div>`;
@@ -603,6 +603,7 @@ function renderSidebar() {
       e.stopPropagation();
       openMenu(btn, [
         { icon: icon("pencil", { size: 16 }), label: "Rename", onClick: () => renameFolder(btn.dataset.more) },
+        { icon: icon("lock", { size: 16 }), label: state.folders.find((f) => f.id === btn.dataset.more)?.isLocked ? "Remove PIN lock" : "Set PIN lock", onClick: () => setFolderPin(btn.dataset.more) },
         { icon: icon("trash", { size: 16 }), label: "Delete", danger: true, onClick: () => deleteFolder(btn.dataset.more) },
       ]);
     };
@@ -629,11 +630,20 @@ async function loadFolders() {
 }
 
 async function openFolder(id) {
+  const f = state.folders.find((x) => x.id === id);
+  if (f?.isLocked) {
+    const pin = await uiPrompt({ title: "Unlock folder", label: `Enter the 4-digit PIN for ${f.title}.`, placeholder: "0000", okText: "Unlock", type: "password", validate: (v) => (/^\d{4}$/.test(v) ? null : "Enter exactly 4 digits") });
+    if (pin === null) return;
+    try {
+      await api(`/api/folders/${id}/unlock`, { method: "POST", body: JSON.stringify({ pin }) });
+    } catch (err) {
+      return uiAlert(err.message, { title: "Couldn't unlock folder" });
+    }
+  }
   state.currentFolder = id;
   state.currentView = null;
   state.selected.clear();
   toggleSidebar(false);
-  const f = state.folders.find((x) => x.id === id);
   const isAdmin = !!state.user?.isAdmin;
   $("#search").value = "";
   $("#search").placeholder = `Search in ${f?.title || "folder"}…`;
@@ -651,7 +661,7 @@ async function openFolder(id) {
       })
       .join(`<span class="crumb-sep">${icon("chevronRight", { size: 13 })}</span>`) || `${icon("folder", { size: 18 })} Drive`;
   $("#topActions").innerHTML = `
-    ${isAdmin && f && !f.isSaved ? `<button class="icon-btn" id="renameFolderBtn" title="Rename folder">${icon("pencil")}</button><button class="icon-btn" id="deleteFolderBtn" title="Delete folder">${icon("trash")}</button>` : ""}
+    ${isAdmin && f && !f.isSaved ? `<button class="icon-btn" id="renameFolderBtn" title="Rename folder">${icon("pencil")}</button><button class="icon-btn" id="folderPinBtn" title="${f.isLocked ? "Remove PIN lock" : "Set PIN lock"}">${icon("lock")}</button><button class="icon-btn" id="deleteFolderBtn" title="Delete folder">${icon("trash")}</button>` : ""}
     ${isAdmin ? `<button class="icon-btn" id="shareFolderBtn" title="Share whole folder">${icon("share")}</button>` : ""}
     <button class="icon-btn" id="sortBtn" title="Sort">${icon("arrowUpDown", { size: 18 })}</button>
     <button class="icon-btn" id="viewToggle" title="Toggle view">${icon(state.view === "grid" ? "list" : "grid")}</button>`;
@@ -665,6 +675,7 @@ async function openFolder(id) {
   $("#sortBtn").onclick = (e) => openSortMenu(e.currentTarget);
   if (isAdmin && f && !f.isSaved) {
     $("#renameFolderBtn").onclick = () => renameFolder(f.id);
+    $("#folderPinBtn").onclick = () => setFolderPin(f.id);
     $("#deleteFolderBtn").onclick = () => deleteFolder(f.id);
   }
   await loadFiles(true);
@@ -804,7 +815,7 @@ function folderCard(f) {
     <div class="card-actions">
       ${isAdmin && !f.isSaved ? `<button class="ca-btn" title="Rename folder" onclick="event.stopPropagation();renameFolder('${f.id}')">${icon("pencil", { size: 15 })}</button><button class="ca-btn danger" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${f.id}')">${icon("trash", { size: 15 })}</button>` : ""}
     </div>
-    <div class="fcard-ic">${icon(f.kind === "saved" ? "inbox" : "folder", { size: 40 })}</div>
+    <div class="fcard-ic">${icon(f.kind === "saved" ? "inbox" : f.isLocked ? "lock" : "folder", { size: 40 })}</div>
     <div class="meta"><div class="nm" title="${esc(f.title)}">${esc(f.title)}</div><div class="sz">Folder</div></div>
   </div>`;
 }
@@ -2058,6 +2069,39 @@ async function renameFolder(id) {
 }
 window.renameFolder = renameFolder;
 
+async function setFolderPin(id) {
+  const f = state.folders.find((x) => x.id === id);
+  if (!f || f.isSaved) return;
+  if (f.isLocked) {
+    if (!(await uiConfirm(`Remove the PIN lock from “${f.title}”?`, { title: "Remove PIN lock", okText: "Remove", danger: true, icon: icon("lock", { size: 20 }) }))) return;
+    try {
+      await api(`/api/folders/${id}/pin`, { method: "DELETE" });
+      await refreshFolders();
+      toast("PIN lock removed");
+    } catch (err) {
+      uiAlert(err.message, { title: "Couldn't remove PIN lock" });
+    }
+    return;
+  }
+  const pin = await uiPrompt({ title: "Set folder PIN", label: "Choose a 4-digit PIN. You will need it each time you open this folder.", placeholder: "0000", okText: "Lock folder", type: "password", validate: (v) => (/^\d{4}$/.test(v) ? null : "Enter exactly 4 digits") });
+  if (pin === null) return;
+  try {
+    await api(`/api/folders/${id}/pin`, { method: "PUT", body: JSON.stringify({ pin }) });
+    state.currentFolder = null;
+    await loadFolders();
+    toast("Folder locked");
+  } catch (err) {
+    uiAlert(err.message, { title: "Couldn't lock folder" });
+  }
+}
+window.setFolderPin = setFolderPin;
+
+function formatDate(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp)) return "Unknown date";
+  return new Date(timestamp).toLocaleDateString();
+}
+
 function folderChain(id) {
   const chain = [];
   let cur = state.folders.find((f) => f.id === id);
@@ -2144,7 +2188,7 @@ async function viewKeys() {
     const items = r.keys
       .map((k) => `<div class="kv-row">
         <div class="kv-ic">${icon("key", { size: 16 })}</div>
-        <div class="info"><div class="t">${esc(k.label)}</div><div class="s">${esc(state.accounts.find((a) => a.id === k.account_id)?.label || k.account_id)} · ${new Date(k.created_at).toLocaleDateString()}</div></div>
+        <div class="info"><div class="t">${esc(k.label)}</div><div class="s">${esc(state.accounts.find((a) => a.id === k.account_id)?.label || k.account_id)} · ${formatDate(k.created_at)}</div></div>
         <button class="icon-btn danger" title="Revoke" onclick="delKey('${k.id}')">${icon("trash", { size: 16 })}</button>
       </div>`)
       .join("");
@@ -2361,7 +2405,7 @@ async function viewUsers() {
     const items = r.users
       .map((u) => `<div class="kv-row">
         <div class="kv-ic">${u.role === "admin" ? icon("shield", { size: 16 }) : icon("user", { size: 16 })}</div>
-        <div class="info"><div class="t">${esc(u.username)} <span class="tag">${u.role}</span>${u.id === r.currentUserId ? ' <span class="tag">you</span>' : ""}</div><div class="s">Created ${new Date(u.created_at).toLocaleDateString()}</div></div>
+        <div class="info"><div class="t">${esc(u.username)} <span class="tag">${u.role}</span>${u.id === r.currentUserId ? ' <span class="tag">you</span>' : ""}</div><div class="s">Created ${formatDate(u.created_at)}</div></div>
         <button class="btn-2" onclick="resetUserPw('${u.id}','${esc(u.username)}')">${icon("lock", { size: 14 })} Password</button>
         <button class="btn-2" onclick="toggleUserRole('${u.id}','${u.role}')">${u.role === "admin" ? "Make user" : "Make admin"}</button>
         ${u.id !== r.currentUserId ? `<button class="icon-btn danger" title="Delete" onclick="delUser('${u.id}','${esc(u.username)}')">${icon("trash", { size: 16 })}</button>` : ""}

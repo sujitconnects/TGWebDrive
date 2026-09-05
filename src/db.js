@@ -67,6 +67,7 @@ export async function initDb() {
       title TEXT NOT NULL,
       peer_json TEXT NOT NULL,
       kind TEXT NOT NULL, -- 'saved' | 'channel'
+      pin_hash TEXT,
       created_at BIGINT NOT NULL
     );
 
@@ -138,6 +139,7 @@ export async function initDb() {
   // Migration: folder/multipart shares have no single message, so msg_id must be nullable.
   await pool.query(`ALTER TABLE shares ALTER COLUMN msg_id DROP NOT NULL`);
   await pool.query(`ALTER TABLE shares ADD COLUMN IF NOT EXISTS msg_ids TEXT`);
+  await pool.query(`ALTER TABLE folders ADD COLUMN IF NOT EXISTS pin_hash TEXT`);
 
   // Migration: seed an admin user from the legacy single admin password (if present),
   // so existing installs keep working after the upgrade to multi-user.
@@ -196,6 +198,7 @@ export const stmt = {
   getFolder: (id, accountId) => one(`SELECT * FROM folders WHERE id = $1 AND account_id = $2`, [id, accountId]),
   getFolderForUser: (id, accountId, userId) => one(`SELECT f.* FROM folders f JOIN user_folders uf ON uf.folder_id = f.id WHERE f.id = $1 AND f.account_id = $2 AND uf.user_id = $3`, [id, accountId, userId]),
   renameFolder: (id, accountId, title) => query(`UPDATE folders SET title = $1 WHERE id = $2 AND account_id = $3`, [title, id, accountId]),
+  setFolderPin: (id, accountId, pinHash) => query(`UPDATE folders SET pin_hash = $1 WHERE id = $2 AND account_id = $3`, [pinHash, id, accountId]),
   deleteFolder: (id, accountId) => query(`DELETE FROM folders WHERE id = $1 AND account_id = $2`, [id, accountId]),
 
   addShare: (s) =>
