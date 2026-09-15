@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { config, PUBLIC_DIR } from "./config.js";
 import { initDb } from "./db.js";
 import { HttpError } from "./tg/manager.js";
+import { pruneStaleDirs } from "./util.js";
 import { auth } from "./routes/auth.js";
 import { folders } from "./routes/folders.js";
 import { files } from "./routes/files.js";
@@ -15,6 +16,17 @@ import { api, keys } from "./routes/api.js";
 import { branding } from "./routes/branding.js";
 
 await initDb();
+
+// Best-effort cleanup of upload temp dirs abandoned by a crash/restart mid-upload.
+// Directories still actively being written to have a recent mtime and are skipped.
+try {
+  const removed = await pruneStaleDirs(config.uploadTmpDir, config.uploadTmpMaxAgeHours * 3600 * 1000, {
+    prefixes: ["tgd-up-", "tgd-api-"],
+  });
+  if (removed.length) console.log(`[startup] removed ${removed.length} abandoned upload temp dir(s)`);
+} catch (e) {
+  console.error("[startup] upload temp dir sweep failed:", e?.message || e);
+}
 
 const app = express();
 app.set("trust proxy", 1);

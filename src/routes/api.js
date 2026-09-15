@@ -1,7 +1,9 @@
 import { Router } from "express";
 import fs from "node:fs";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { stmt } from "../db.js";
+import { config } from "../config.js";
 import { requireAppAuth, requireAdmin } from "../middleware.js";
 import { getConnectedClient, HttpError } from "../tg/manager.js";
 import {
@@ -13,7 +15,7 @@ import {
   deleteFiles,
   streamToResponse,
 } from "../tg/operations.js";
-import { tempPath, safeFilename, uid, token } from "../util.js";
+import { tempPath, safeFilename, uid, token, checkDeclaredUploadSize, wouldExceedUploadLimit, cleanupPath, fmtBytes } from "../util.js";
 import { hasDuplicateNameSize } from "../duplicate.js";
 
 export const api = Router();
@@ -74,7 +76,11 @@ api.post("/v1/files", requireApiKey, async (req, res, next) => {
     const { peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
     const fileName = safeFilename(req.headers["x-filename"] ? decodeURIComponent(req.headers["x-filename"]) : "file");
-    const size = Number(req.headers["x-filesize"] || 0);
+    const sizeCheck = checkDeclaredUploadSize(req.headers["x-filesize"], config.maxUploadBytes);
+    if (!sizeCheck.ok) {
+      throw new HttpError(413, `File exceeds the maximum allowed size of ${fmtBytes(config.maxUploadBytes)}`);
+    }
+    const size = sizeCheck.size;
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
 
@@ -84,15 +90,36 @@ api.post("/v1/files", requireApiKey, async (req, res, next) => {
       throw new HttpError(409, `A file named “${fileName}” with the same size already exists in this folder.`);
     }
 
-    upDir = fs.mkdtempSync("/tmp/tgd-api-");
+    fs.mkdirSync(config.uploadTmpDir, { recursive: true });
+    upDir = fs.mkdtempSync(path.join(config.uploadTmpDir, "tgd-api-"));
     tmp = `${upDir}/${fileName}`;
-    await new Promise((resolve, reject) => {
-      const out = fs.createWriteStream(tmp);
-      req.pipe(out);
-      out.on("finish", resolve);
-      out.on("error", reject);
-      req.on("error", reject);
-    });
+    let received = 0;
+    let sizeExceeded = false;
+    try {
+      await new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(tmp);
+        const onData = (c) => {
+          if (wouldExceedUploadLimit(received, c.length, config.maxUploadBytes)) {
+            sizeExceeded = true;
+            req.removeListener("data", onData);
+            out.destroy(new Error("UPLOAD_SIZE_EXCEEDED"));
+            req.destroy(new Error("UPLOAD_SIZE_EXCEEDED"));
+            return;
+          }
+          received += c.length;
+        };
+        req.on("data", onData);
+        req.pipe(out);
+        out.on("finish", resolve);
+        out.on("error", reject);
+        req.on("error", reject);
+      });
+    } catch (streamErr) {
+      if (sizeExceeded || streamErr?.message === "UPLOAD_SIZE_EXCEEDED") {
+        throw new HttpError(413, `File exceeds the maximum allowed size of ${fmtBytes(config.maxUploadBytes)}`);
+      }
+      throw streamErr;
+    }
     const sent = await uploadFile(client, peer, {
       filePath: tmp,
       fileName,
@@ -100,10 +127,10 @@ api.post("/v1/files", requireApiKey, async (req, res, next) => {
       caption,
       forceDocument,
     });
-    fs.rm(upDir, { recursive: true, force: true }, () => {});
+    await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     res.json({ ok: true, file: serializeMessage(sent) });
   } catch (e) {
-    if (upDir) fs.rm(upDir, { recursive: true, force: true }, () => {});
+    if (upDir) await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     next(e);
   }
 });

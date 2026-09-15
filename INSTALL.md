@@ -78,6 +78,19 @@ DATABASE_SSL=true
 # Optional: point uploads/thumbnails/branding assets at a persistent
 # volume/path. Defaults to ./data next to the app.
 DATA_DIR=
+
+# Optional: maximum accepted upload size in bytes (default 2147483648 = 2 GiB).
+# Enforced both from the client's declared size and the actual bytes received,
+# so a spoofed/missing header can't bypass the limit.
+MAX_UPLOAD_BYTES=2147483648
+
+# Optional: where in-flight upload temp files/parts are written while an
+# upload is being received and sent to Telegram. Defaults to DATA_DIR/uploads.
+UPLOAD_TMP_DIR=/app/data/uploads-tmp
+
+# Optional: hours an abandoned upload temp directory may sit before the
+# startup sweep removes it. Default: 24.
+UPLOAD_TMP_MAX_AGE_HOURS=24
 ```
 
 Then generate a strong secret:
@@ -97,6 +110,16 @@ createdb tgdrive
 The app creates its own tables on first start — no manual migration needed.
 
 > **Important — don't lose your data on redeploy:** every folder/channel you create and your logged-in Telegram session live in the Postgres database pointed to by `DATABASE_URL`. As long as that database is a real, persistent Postgres instance (not a local file), your data survives rebuilds/redeploys even on platforms that give you a fresh, ephemeral filesystem each time (Docker, Nixpacks-based PaaS, Kubernetes, etc.). If you previously ran an older version of TGWebDrive backed by SQLite and lost data to an ephemeral filesystem, log in again and use **New → Import existing channel** to reattach the channels Telegram still has — they aren't deleted, just no longer linked in the app.
+
+### Upload temp storage, disk space, and cleanup
+
+Uploads are received to disk (never fully buffered in memory) at `UPLOAD_TMP_DIR` (default `DATA_DIR/uploads`) before being sent to Telegram, and the temp file/directory is removed immediately after each upload finishes — whether it succeeds or fails.
+
+- **Persistent volume:** mount your platform's persistent volume at (or above) `DATA_DIR` so `UPLOAD_TMP_DIR`, the thumbnail cache, and branding assets all live on durable storage. On Dokploy/Docker this typically means mounting a volume at `/app/data`.
+- **Free disk space:** plan for at least one file's worth of headroom per concurrent upload — a single in-flight upload temporarily needs up to `MAX_UPLOAD_BYTES` of free space (large files are also briefly duplicated on disk while being split into `SPLIT_PART_BYTES` chunks for Telegram). Size the volume to your largest expected upload × your expected concurrency.
+- **Cleanup behavior:** temp files/directories are deleted right after each upload request completes (success or failure). As a backstop, the app also sweeps `UPLOAD_TMP_DIR` on startup and removes any leftover upload directory older than `UPLOAD_TMP_MAX_AGE_HOURS` (default 24h) — this only catches directories abandoned by a crash/restart mid-upload; directories still being actively written to are never touched.
+- **Maximum upload size:** set `MAX_UPLOAD_BYTES` (default 2 GiB). This is enforced twice — once from the client's declared `x-filesize` header (fast rejection before any bytes are received) and once against the actual bytes streamed in (so a missing/incorrect header can't be used to bypass the limit).
+- **Survives a container restart?** The upload temp files themselves do not need to survive a restart — an in-progress upload is lost and must be retried by the client either way. What matters is that `UPLOAD_TMP_DIR` sits on the same persistent volume as `DATA_DIR` so disk usage doesn't silently leak across restarts, and that the startup sweep runs on every boot to reclaim space from any upload that was interrupted by the previous restart.
 
 ---
 

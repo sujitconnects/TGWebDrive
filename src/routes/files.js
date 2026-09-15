@@ -1,5 +1,6 @@
 import { Router } from "express";
 import fs from "node:fs";
+import path from "node:path";
 import mime from "mime-types";
 import archiver from "archiver";
 import { stmt } from "../db.js";
@@ -23,7 +24,7 @@ import {
   streamThumb,
 } from "../tg/operations.js";
 import { publish, subscribe, finish, fail } from "../jobs.js";
-import { uid, safeFilename } from "../util.js";
+import { uid, safeFilename, checkDeclaredUploadSize, wouldExceedUploadLimit, cleanupPath, fmtBytes } from "../util.js";
 import { generateThumb, IMAGE_RE, thumbCachePath, generatePreview, previewCachePath } from "../thumb.js";
 import { hasDuplicateNameSize, findDuplicateItems } from "../duplicate.js";
 
@@ -157,7 +158,11 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     const { row, peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
     const fileName = safeFilename(decodeURIComponent(req.headers["x-filename"] || "file"));
-    const size = Number(req.headers["x-filesize"] || 0);
+    const sizeCheck = checkDeclaredUploadSize(req.headers["x-filesize"], config.maxUploadBytes);
+    if (!sizeCheck.ok) {
+      throw new HttpError(413, `File exceeds the maximum allowed size of ${fmtBytes(config.maxUploadBytes)}`);
+    }
+    const size = sizeCheck.size;
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
 
@@ -168,22 +173,38 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
       throw new HttpError(409, `A file named “${fileName}” with the same size already exists in this folder.`);
     }
 
-    upDir = fs.mkdtempSync("/tmp/tgd-up-");
+    fs.mkdirSync(config.uploadTmpDir, { recursive: true });
+    upDir = fs.mkdtempSync(path.join(config.uploadTmpDir, "tgd-up-"));
     tmp = `${upDir}/${fileName}`;
     const out = fs.createWriteStream(tmp);
     let received = 0;
-    await new Promise((resolve, reject) => {
-      const onData = (c) => {
-        received += c.length;
-        if (job && size) publish(job, { phase: "receiving", received, size, ratio: received / size });
-      };
-      req.on("data", onData);
-      req.pipe(out);
-      out.on("finish", () => resolve());
-      out.on("error", reject);
-      req.on("error", reject);
-      req.on("aborted", () => reject(new Error("Client aborted upload")));
-    });
+    let sizeExceeded = false;
+    try {
+      await new Promise((resolve, reject) => {
+        const onData = (c) => {
+          if (wouldExceedUploadLimit(received, c.length, config.maxUploadBytes)) {
+            sizeExceeded = true;
+            req.removeListener("data", onData);
+            out.destroy(new Error("UPLOAD_SIZE_EXCEEDED"));
+            req.destroy(new Error("UPLOAD_SIZE_EXCEEDED"));
+            return;
+          }
+          received += c.length;
+          if (job && size) publish(job, { phase: "receiving", received, size, ratio: received / size });
+        };
+        req.on("data", onData);
+        req.pipe(out);
+        out.on("finish", () => resolve());
+        out.on("error", reject);
+        req.on("error", reject);
+        req.on("aborted", () => reject(new Error("Client aborted upload")));
+      });
+    } catch (streamErr) {
+      if (sizeExceeded || streamErr?.message === "UPLOAD_SIZE_EXCEEDED") {
+        throw new HttpError(413, `File exceeds the maximum allowed size of ${fmtBytes(config.maxUploadBytes)}`);
+      }
+      throw streamErr;
+    }
 
     if (job) publish(job, { phase: "sending", uploaded: 0, total: size, ratio: 0 });
     let thumbPath;
@@ -245,7 +266,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
               });
             },
           });
-          fs.unlink(partPath, () => {});
+          await cleanupPath(partPath, { label: "upload-part-cleanup" });
           const msgId = Number(sent && sent.id);
           if (!msgId || Number.isNaN(msgId)) throw new Error("Telegram returned no id for part " + (partIndex + 1));
           parts.push({ msgId, size: thisSize });
@@ -265,8 +286,9 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
         await stmt.deleteMultipart(mpId);
         await stmt.deleteSharesByMultipart(mpId);
         throw splitErr;
+      } finally {
+        await cleanupPath(upDir, { label: "upload-dir-cleanup" });
       }
-      fs.rm(upDir, { recursive: true, force: true }, () => {});
       const file = serializeMultipart(await stmt.getMultipart(mpId));
       if (job) finish(job, { id: file?.id, name: file?.name });
       return res.json({ ok: true, file });
@@ -289,12 +311,12 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
         });
       },
     });
-    fs.rm(upDir, { recursive: true, force: true }, () => {});
+    await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     const file = serializeMessage(sent);
     if (job) finish(job, { id: file?.id, name: file?.name });
     res.json({ ok: true, file });
   } catch (e) {
-    if (upDir) fs.rm(upDir, { recursive: true, force: true }, () => {});
+    if (upDir) await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     const aborted = e?.message === "Client aborted upload" || e?.code === "ERR_ABORTED";
     if (job) fail(job, aborted ? new Error("Cancelled") : e);
     if (aborted) return res.status(499).end(); // client went away — don't log a 500

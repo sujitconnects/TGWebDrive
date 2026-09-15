@@ -7,6 +7,7 @@ import { getConnectedClient, HttpError } from "../tg/manager.js";
 import { buildPeer, getOne, serializeMessage, serializeMultipart, parseParts, streamToResponse, streamMultipart, streamThumb, listMessages } from "../tg/operations.js";
 import { config } from "../config.js";
 import { hashPassword, verifyPassword, shortId, safeFilename } from "../util.js";
+import { isMsgAllowedForShare } from "../share-access.js";
 
 export const share = Router(); // mounted under /api  (metadata + management)
 export const pubBin = Router(); // mounted at root (binary streams + zip)
@@ -34,6 +35,14 @@ function verifyAccess(tok, shareId) {
 }
 
 function publicShare(s) {
+  let msgIds = null;
+  if (s.msg_ids) {
+    try {
+      msgIds = JSON.parse(s.msg_ids);
+    } catch {
+      msgIds = null;
+    }
+  }
   return {
     id: s.id,
     kind: s.kind || "file",
@@ -45,7 +54,7 @@ function publicShare(s) {
     expired: s.expires_at && s.expires_at < Date.now(),
     createdAt: s.created_at,
     downloads: s.downloads,
-    msgIds: s.msg_ids ? JSON.parse(s.msg_ids) : null,
+    msgIds,
   };
 }
 
@@ -95,16 +104,9 @@ share.get("/public/share/:id/files", async (req, res, next) => {
     const peer = buildPeer({ peer_json: s.peer_json });
     const r = await listMessages(client, peer, { limit: 200 });
     const token = encodeURIComponent(req.query.token || "");
-    // Filter items based on share type
-    let items = r.items;
-    if (s.msg_ids) {
-      // Multi-file share: filter by msg_ids array
-      const allowedIds = JSON.parse(s.msg_ids).map(Number);
-      items = items.filter(f => allowedIds.includes(Number(f.id)));
-    } else if (s.msg_id) {
-      // Single file share: filter by msg_id
-      items = items.filter(f => Number(f.id) === Number(s.msg_id));
-    }
+    // Reuse the exact same allow-list check the per-file raw/thumb routes use,
+    // so the listing can never drift from (and expose more than) what's downloadable.
+    const items = r.items.filter((f) => isMsgAllowedForShare(s, f.id));
     const mapped = items.map((f) => ({
       ...f,
       rawUrl: `/s/${s.id}/file/${f.id}/raw${token ? "?token=" + token : ""}`,
@@ -260,12 +262,14 @@ pubBin.get("/s/:id/thumb", async (req, res, next) => {
   }
 });
 
-// folder share: per-file raw + thumb
+// folder / multi-file share: per-file raw + thumb
 pubBin.get("/s/:id/file/:msgId/raw", async (req, res, next) => {
   try {
     const s = await loadShareOrDeny(req, res);
     if (!s) return;
-    if ((s.kind || "file") !== "folder" && !s.msg_ids) return res.status(400).end();
+    // Deny (as 404, same as "not found") rather than leak whether an unshared
+    // message id exists in the underlying folder/channel.
+    if (!isMsgAllowedForShare(s, req.params.msgId)) return res.status(404).end();
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, req.params.msgId);
@@ -279,6 +283,7 @@ pubBin.get("/s/:id/file/:msgId/thumb", async (req, res, next) => {
   try {
     const s = await loadShareOrDeny(req, res);
     if (!s) return;
+    if (!isMsgAllowedForShare(s, req.params.msgId)) return res.status(404).end();
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, req.params.msgId);
@@ -297,8 +302,7 @@ pubBin.get("/s/:id/zip", async (req, res, next) => {
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const r = await listMessages(client, peer, { limit: 200 });
-    const allowedIds = s.msg_ids ? new Set(JSON.parse(s.msg_ids).map(Number)) : null;
-    const items = allowedIds ? r.items.filter((file) => allowedIds.has(Number(file.id))) : r.items;
+    const items = r.items.filter((file) => isMsgAllowedForShare(s, file.id));
     const zipName = safeFilename((s.name || "folder") + ".zip");
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`);

@@ -10,8 +10,12 @@ export const ROOT = path.resolve(__dirname, "..");
 export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
 export const PUBLIC_DIR = path.join(ROOT, "public");
 export const UPLOAD_TMP = path.join(DATA_DIR, "uploads");
+// Where in-flight upload temp files/parts are written. Defaults to a persistent
+// location under DATA_DIR (not /tmp) so container tmpfs limits and restarts
+// don't silently lose or corrupt uploads in progress.
+export const UPLOAD_TMP_DIR = process.env.UPLOAD_TMP_DIR ? path.resolve(process.env.UPLOAD_TMP_DIR) : UPLOAD_TMP;
 
-for (const d of [DATA_DIR, UPLOAD_TMP]) fs.mkdirSync(d, { recursive: true });
+for (const d of [DATA_DIR, UPLOAD_TMP, UPLOAD_TMP_DIR]) fs.mkdirSync(d, { recursive: true });
 
 function readSecret() {
   const envFile = path.join(ROOT, ".env");
@@ -43,6 +47,10 @@ export const config = {
   secret: readSecret(),
   publicUrl: (process.env.PUBLIC_URL || "").replace(/\/$/, ""),
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
+  // Temp directory for in-flight uploads (see UPLOAD_TMP_DIR above) and how long an
+  // abandoned upload dir may sit before the startup sweep removes it.
+  uploadTmpDir: UPLOAD_TMP_DIR,
+  uploadTmpMaxAgeHours: Number(process.env.UPLOAD_TMP_MAX_AGE_HOURS) || 24,
   // Keep large uploads in smaller Telegram transfers so a connection reset does
   // not lose an entire multi-gigabyte upload. Parts reassemble on download.
   splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || 512 * 1024 * 1024,

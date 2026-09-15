@@ -1,5 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import path from "node:path";
+import fsp from "node:fs/promises";
 
 export function uid() {
   return randomUUID().replace(/-/g, "").slice(0, 16);
@@ -57,6 +58,66 @@ export function safeFilename(name) {
 
 export function tempPath(prefix = "up") {
   return path.join("/tmp", `${prefix}-${Date.now()}-${shortId(6)}`);
+}
+
+// Validate a client-declared upload size (x-filesize header) against the configured
+// limit *before* any bytes are received. An absent/non-numeric header is treated as
+// "unknown size" (not rejected here) — the streaming guard below is the real backstop.
+export function checkDeclaredUploadSize(headerValue, maxBytes) {
+  if (headerValue === undefined || headerValue === null || headerValue === "") {
+    return { size: 0, declared: false, ok: true };
+  }
+  const size = Number(headerValue);
+  if (!Number.isFinite(size) || size < 0) {
+    return { size: 0, declared: false, ok: true };
+  }
+  return { size, declared: true, ok: size <= maxBytes };
+}
+
+// Hard backstop for the streaming guard: true once the actual bytes received (so far,
+// including this chunk) would exceed maxBytes — independent of any declared header.
+export function wouldExceedUploadLimit(receivedSoFar, chunkLen, maxBytes) {
+  return receivedSoFar + chunkLen > maxBytes;
+}
+
+// Best-effort recursive removal that never throws — logs failures instead of
+// silently discarding them (previous code used fire-and-forget fs.rm/unlink).
+export async function cleanupPath(target, { label = "cleanup" } = {}) {
+  if (!target) return;
+  try {
+    await fsp.rm(target, { recursive: true, force: true });
+  } catch (e) {
+    console.error(`[${label}] failed to remove ${target}:`, e?.message || e);
+  }
+}
+
+// Remove subdirectories of baseDir older than maxAgeMs (by mtime), optionally
+// restricted to a set of name prefixes. Used at startup to sweep abandoned upload
+// temp directories left behind by a crash/restart mid-upload. Directories still
+// being written to have a recent mtime and are left alone.
+export async function pruneStaleDirs(baseDir, maxAgeMs, { prefixes = [], now = Date.now() } = {}) {
+  const removed = [];
+  let entries;
+  try {
+    entries = await fsp.readdir(baseDir, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (prefixes.length && !prefixes.some((p) => entry.name.startsWith(p))) continue;
+    const full = path.join(baseDir, entry.name);
+    try {
+      const stat = await fsp.stat(full);
+      if (now - stat.mtimeMs > maxAgeMs) {
+        await fsp.rm(full, { recursive: true, force: true });
+        removed.push(full);
+      }
+    } catch (e) {
+      console.error("[upload-sweep] failed to inspect/remove", full, e?.message || e);
+    }
+  }
+  return removed;
 }
 
 export function isImage(mime) {
