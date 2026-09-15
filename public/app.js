@@ -1085,8 +1085,30 @@ function downloadFile(f) {
 
 /* ===================== preview ===================== */
 function previewFile(id) {
-  const f = state.files.find((x) => String(x.id) === String(id));
+  const idx = state.files.findIndex((x) => String(x.id) === String(id));
+  if (idx === -1) return;
+  showPreviewModal(idx);
+}
+function navigatePreview(delta) {
+  const cur = window.__pf;
+  if (!cur) return;
+  const idx = state.files.findIndex((x) => String(x.id) === String(cur.id));
+  const nextIdx = idx + delta;
+  if (idx === -1 || nextIdx < 0 || nextIdx >= state.files.length) return;
+  showPreviewModal(nextIdx);
+}
+window.navigatePreview = navigatePreview;
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("pmodal")) return;
+  if (e.target && /input|textarea/i.test(e.target.tagName)) return;
+  if (e.key === "ArrowLeft") navigatePreview(-1);
+  else if (e.key === "ArrowRight") navigatePreview(1);
+  else if (e.key === "Escape") $("#pmodal")?.remove();
+});
+function showPreviewModal(idx) {
+  const f = state.files[idx];
   if (!f) return;
+  $("#pmodal")?.remove();
   const url = `/api/files/${f.id}/raw?folder=${state.currentFolder}`;
   const previewUrl = /\.(heic|heif)$/i.test(f.name || f.caption || "") ? `/api/files/${f.id}/thumb?folder=${state.currentFolder}` : url;
   let body = "";
@@ -1099,12 +1121,16 @@ function previewFile(id) {
   if (!body)
     body = `<div class="no-prev">${fileIcon(f.multipart ? "archive" : f.kind, 56)}<div class="np-msg">${f.multipart ? `Split file · ${f.partsCount} parts` : "No preview available"}</div><div class="np-hint" style="color:var(--muted);font-size:12px;margin-bottom:12px">Downloads reassemble all parts into one file.</div><button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 16 })} Download</button></div>`;
   window.__pf = f;
+  const hasPrev = idx > 0;
+  const hasNext = idx < state.files.length - 1;
+  const navBtn = (dir) =>
+    `<button type="button" class="preview-nav ${dir}" onclick="event.stopPropagation();navigatePreview(${dir === "prev" ? -1 : 1})" aria-label="${dir === "prev" ? "Previous file" : "Next file"}">${icon(dir === "prev" ? "chevronLeft" : "chevronRight", { size: 22 })}</button>`;
   const capBtn = `<button class="btn-2" onclick="renameModal(window.__pf)">${icon("pencil", { size: 15 })} Rename</button>`;
   const modal = el(`<div class="modal-bg" id="pmodal">
     <div class="modal wide">
       <div class="head"><div class="t">${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}</div>
         <button class="icon-btn" onclick="document.getElementById('pmodal').remove()">${icon("x", { size: 18 })}</button></div>
-      <div class="preview-wrap">${body}</div>
+      <div class="preview-wrap">${hasPrev ? navBtn("prev") : ""}${body}${hasNext ? navBtn("next") : ""}</div>
       <div class="preview-info">
         <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
         <div class="spacer"></div>
