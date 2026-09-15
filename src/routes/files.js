@@ -24,7 +24,7 @@ import {
 } from "../tg/operations.js";
 import { publish, subscribe, finish, fail } from "../jobs.js";
 import { uid, safeFilename } from "../util.js";
-import { generateThumb, IMAGE_RE, thumbCachePath } from "../thumb.js";
+import { generateThumb, IMAGE_RE, thumbCachePath, generatePreview, previewCachePath } from "../thumb.js";
 import { hasDuplicateNameSize, findDuplicateItems } from "../duplicate.js";
 
 export const files = Router();
@@ -423,6 +423,37 @@ files.get("/files/:id/thumb", requireAppAuth, requireAccount, async (req, res, n
     const client = await getConnectedClient(req.accountId);
     const msg = await getOne(client, peer, req.params.id);
     await streamThumb(client, msg, res, cacheKey);
+  } catch (e) {
+    if (!res.headersSent) res.status(404).end();
+  }
+});
+
+// Downsized, cached preview for the modal viewer — much faster than the full-quality /raw file.
+files.get("/files/:id/preview", requireAppAuth, requireAccount, async (req, res, next) => {
+  try {
+    if (isMultipartId(req.params.id)) return res.status(404).end();
+    const cacheKey = `${req.accountId}-${req.query.folder}-${req.params.id}`;
+    const cachePath = previewCachePath(cacheKey);
+    if (fs.existsSync(cachePath)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=604800");
+      return res.sendFile(cachePath);
+    }
+    const { peer } = await loadFolder(req);
+    const client = await getConnectedClient(req.accountId);
+    const msg = await getOne(client, peer, req.params.id);
+    const meta = serializeMessage(msg);
+    const isImg = meta.kind === "image" || (meta.mime && meta.mime.startsWith("image/"));
+    if (!isImg) return res.status(404).end();
+    const buf = await client.downloadMedia(msg);
+    if (!Buffer.isBuffer(buf) || !buf.length) return res.status(404).end();
+    const preview = await generatePreview(buf);
+    try {
+      fs.writeFileSync(cachePath, preview);
+    } catch {}
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "public, max-age=604800");
+    res.send(preview);
   } catch (e) {
     if (!res.headersSent) res.status(404).end();
   }

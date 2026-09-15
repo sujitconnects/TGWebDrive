@@ -10,6 +10,10 @@ export function thumbCachePath(key) {
   return path.join(THUMB_DIR, `${key}.jpg`);
 }
 
+export function previewCachePath(key) {
+  return path.join(THUMB_DIR, `${key}-lg.jpg`);
+}
+
 // Generate a small JPEG thumbnail from an image path or buffer.
 export async function generateThumb(input, outPath) {
   let source = input;
@@ -21,6 +25,24 @@ export async function generateThumb(input, outPath) {
     source = Buffer.from(await heicConvert({ buffer, format: "JPEG", quality: 0.82 }));
   }
   const pipeline = sharp(source, { failOn: "none" }).resize(480, 480, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 });
+  if (outPath) {
+    await pipeline.toFile(outPath);
+    return outPath;
+  }
+  return pipeline.toBuffer();
+}
+
+// Generate a larger, still-compressed JPEG for the preview modal (full quality is reserved for downloads).
+export async function generatePreview(input, outPath) {
+  let source = input;
+  try {
+    source = await sharp(input).rotate().toBuffer();
+  } catch {
+    const heicConvert = (await import("heic-convert")).default;
+    const buffer = Buffer.isBuffer(input) ? input : await fs.promises.readFile(input);
+    source = Buffer.from(await heicConvert({ buffer, format: "JPEG", quality: 0.88 }));
+  }
+  const pipeline = sharp(source, { failOn: "none" }).resize(1600, 1600, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 });
   if (outPath) {
     await pipeline.toFile(outPath);
     return outPath;

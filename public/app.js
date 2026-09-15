@@ -1110,11 +1110,13 @@ function showPreviewModal(idx) {
   if (!f) return;
   $("#pmodal")?.remove();
   const url = `/api/files/${f.id}/raw?folder=${state.currentFolder}`;
-  const previewUrl = /\.(heic|heif)$/i.test(f.name || f.caption || "") ? `/api/files/${f.id}/thumb?folder=${state.currentFolder}` : url;
+  const thumbUrl = `/api/files/${f.id}/thumb?folder=${state.currentFolder}`;
+  const previewUrl = `/api/files/${f.id}/preview?folder=${state.currentFolder}`;
   let body = "";
   // Split files can't be seeked inline, so skip rich preview and offer download.
   if (f.multipart) body = "";
-  else if (f.kind === "image") body = `<img src="${previewUrl}" alt="" />`;
+  // Show the cached thumbnail instantly, then swap to the sharper (still downsized) preview once it loads.
+  else if (f.kind === "image") body = `<img class="preview-img" src="${thumbUrl}" data-full="${previewUrl}" alt="" />`;
   else if (f.kind === "video") body = `<video src="${url}" controls autoplay></video>`;
   else if (f.kind === "audio") body = `<div class="audio-wrap">${fileIcon("audio", 56)}<audio src="${url}" controls autoplay></audio></div>`;
   else if (f.kind === "pdf") body = `<iframe class="pdf" src="${url}"></iframe>`;
@@ -1143,6 +1145,14 @@ function showPreviewModal(idx) {
     if (e.target === modal) modal.remove();
   };
   document.body.appendChild(modal);
+  const previewImg = modal.querySelector(".preview-img");
+  if (previewImg) {
+    const full = new Image();
+    full.onload = () => {
+      if (previewImg.isConnected) previewImg.src = full.src;
+    };
+    full.src = previewImg.dataset.full;
+  }
 }
 window.previewFile = previewFile;
 window.downloadFile = downloadFile;
