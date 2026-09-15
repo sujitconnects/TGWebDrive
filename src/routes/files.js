@@ -24,7 +24,7 @@ import {
 } from "../tg/operations.js";
 import { publish, subscribe, finish, fail } from "../jobs.js";
 import { uid, safeFilename } from "../util.js";
-import { generateThumb, IMAGE_RE } from "../thumb.js";
+import { generateThumb, IMAGE_RE, thumbCachePath } from "../thumb.js";
 import { hasDuplicateNameSize, findDuplicateItems } from "../duplicate.js";
 
 export const files = Router();
@@ -412,10 +412,17 @@ files.get("/files/zip", requireAppAuth, requireAccount, async (req, res, next) =
 files.get("/files/:id/thumb", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     if (isMultipartId(req.params.id)) return res.status(404).end();
+    const cacheKey = `${req.accountId}-${req.query.folder}-${req.params.id}`;
+    const cachePath = thumbCachePath(cacheKey);
+    if (fs.existsSync(cachePath)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=604800");
+      return res.sendFile(cachePath);
+    }
     const { peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
     const msg = await getOne(client, peer, req.params.id);
-    await streamThumb(client, msg, res, `${req.accountId}-${req.query.folder}-${req.params.id}`);
+    await streamThumb(client, msg, res, cacheKey);
   } catch (e) {
     if (!res.headersSent) res.status(404).end();
   }

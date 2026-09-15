@@ -383,6 +383,7 @@ export async function streamMultipart(client, peer, parts, total, req, res, { at
 /* ---------- thumbnail ---------- */
 
 export async function streamThumb(client, msg, res, cacheKey) {
+  const cachePath = cacheKey ? thumbCachePath(cacheKey) : null;
   // 1. native Telegram thumbnail
   const tmp = `/tmp/tgd-thumb-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
   try {
@@ -390,6 +391,11 @@ export async function streamThumb(client, msg, res, cacheKey) {
     if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
       const data = fs.readFileSync(tmp);
       fs.unlink(tmp, () => {});
+      if (cachePath) {
+        try {
+          fs.writeFileSync(cachePath, data);
+        } catch {}
+      }
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Cache-Control", "public, max-age=604800");
       return res.send(data);
@@ -400,8 +406,7 @@ export async function streamThumb(client, msg, res, cacheKey) {
   // 2. no native thumb — generate one from the full image (images only)
   const meta = serializeMessage(msg);
   const isImg = meta.kind === "image" || (meta.mime && meta.mime.startsWith("image/"));
-  if (isImg && cacheKey) {
-    const cachePath = thumbCachePath(cacheKey);
+  if (isImg && cachePath) {
     try {
       if (!fs.existsSync(cachePath)) {
         const buf = await client.downloadMedia(msg);

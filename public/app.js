@@ -249,6 +249,7 @@ const state = {
   search: "",
   offsetId: 0,
   loading: false,
+  loadMoreError: false,
   sidebarOpen: false,
   sortBy: localStorage.getItem("tg.sortBy") || "date",
   sortDir: localStorage.getItem("tg.sortDir") || "desc",
@@ -692,6 +693,7 @@ async function loadFiles(reset) {
   if (reset) {
     state.offsetId = 0;
     state.files = [];
+    state.loadMoreError = false;
     content().innerHTML = `<div class="center-load"><div class="spinner"></div></div>`;
   }
   state.loading = true;
@@ -720,12 +722,9 @@ async function loadFiles(reset) {
   } catch (err) {
     if (reset) content().innerHTML = emptyHtml(err.message, "alert");
     else {
+      state.loadMoreError = true;
       uiAlert(err.message, { title: "Couldn't load more files" });
-      const loadMoreBtn = content().querySelector("#loadMoreBtn");
-      if (loadMoreBtn) {
-        loadMoreBtn.disabled = false;
-        loadMoreBtn.innerHTML = `${icon("chevronRight", { size: 14, cls: "down" })} Load more`;
-      }
+      renderFiles();
     }
   } finally {
     state.loading = false;
@@ -865,6 +864,31 @@ function wireFolderCards(scope) {
     };
   });
 }
+function wireScrollSentinel(scope) {
+  if (state._scrollIO) {
+    state._scrollIO.disconnect();
+    state._scrollIO = null;
+  }
+  const el = scope.querySelector("#scrollSentinel");
+  if (!el) return;
+  if (state.loadMoreError) {
+    el.onclick = async () => {
+      state.loadMoreError = false;
+      renderFiles();
+      await loadFiles(false);
+    };
+    return;
+  }
+  const io = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && !state.loading && state.offsetId && !state.loadMoreError) loadFiles(false);
+    },
+    { root: content(), rootMargin: "600px" }
+  );
+  io.observe(el);
+  state._scrollIO = io;
+}
+
 function renderFiles() {
   const c = content();
   const subs = state.currentFolder ? state.folders.filter((f) => f.parentId === state.currentFolder) : [];
@@ -905,17 +929,13 @@ function renderFiles() {
       </div>`
           )
           .join("")}</div>`;
-  const more = state.offsetId ? `<div class="load-more"><button class="btn-2" id="loadMoreBtn" type="button">${icon("chevronRight", { size: 14, cls: "down" })} Load more</button></div>` : "";
-  c.innerHTML = subsHtml + toolbar + list + more;
-  const loadMoreBtn = c.querySelector("#loadMoreBtn");
-  if (loadMoreBtn) {
-    loadMoreBtn.onclick = async () => {
-      if (state.loading) return;
-      loadMoreBtn.disabled = true;
-      loadMoreBtn.innerHTML = `${icon("loader", { size: 14 })} Loading...`;
-      await loadFiles(false);
-    };
-  }
+  const sentinel = state.offsetId
+    ? state.loadMoreError
+      ? `<div class="load-more"><button class="btn-2" id="scrollSentinel" type="button">${icon("refresh", { size: 14 })} Retry</button></div>`
+      : `<div class="load-more" id="scrollSentinel">${icon("loader", { size: 14, cls: "spin-slow" })} Loading more...</div>`
+    : "";
+  c.innerHTML = subsHtml + toolbar + list + sentinel;
+  wireScrollSentinel(c);
   wireFolderCards(c);
   $$(".card:not(.folder-card), .list .row", c).forEach((node) => {
     const id = node.dataset.id;
