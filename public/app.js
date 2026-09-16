@@ -1117,7 +1117,7 @@ function showPreviewModal(idx) {
   const previewUrl = `/api/files/${f.id}/preview?folder=${state.currentFolder}`;
   let body = "";
   if (f.multipart) body = "";
-  else if (f.kind === "image") body = `<img class="preview-img" src="${thumbUrl}" data-full="${previewUrl}" alt="" />`;
+  else if (f.kind === "image") body = `<img class="preview-img" src="${previewUrl}" alt="" loading="eager" decoding="async" />`;
   else if (f.kind === "video") body = `<video src="${url}" controls autoplay></video>`;
   else if (f.kind === "audio") body = `<div class="audio-wrap">${fileIcon("audio", 56)}<audio src="${url}" controls autoplay></audio></div>`;
   else if (f.kind === "pdf") body = `<iframe class="pdf" src="${url}"></iframe>`;
@@ -1137,7 +1137,11 @@ function showPreviewModal(idx) {
       <div class="modal wide">
         <div class="head"><div class="t">${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}</div>
           <button class="icon-btn preview-close" type="button" aria-label="Close preview">${icon("x", { size: 18 })}</button></div>
-        <div class="preview-wrap"></div>
+        <div class="preview-wrap">
+          <button type="button" class="preview-nav prev" aria-label="Previous file" style="display:none">${icon("chevronLeft", { size: 22 })}</button>
+          <div class="preview-media"></div>
+          <button type="button" class="preview-nav next" aria-label="Next file" style="display:none">${icon("chevronRight", { size: 22 })}</button>
+        </div>
         <div class="preview-info"></div>
       </div></div>`);
     modal.onclick = (e) => {
@@ -1149,19 +1153,34 @@ function showPreviewModal(idx) {
 
   const title = modal.querySelector(".head .t");
   const previewWrap = modal.querySelector(".preview-wrap");
+  const previewMedia = previewWrap.querySelector(".preview-media");
   const previewInfo = modal.querySelector(".preview-info");
+  const prevNavEl = modal.querySelector(".preview-nav.prev");
+  const nextNavEl = modal.querySelector(".preview-nav.next");
 
   title.innerHTML = `${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}`;
-  const mediaBody = body ? `<div class="preview-media">${body}</div>` : "";
-  const prevNav = hasPrev ? navBtn("prev") : "";
-  const nextNav = hasNext ? navBtn("next") : "";
-  previewWrap.innerHTML = `${prevNav}${mediaBody}${nextNav}`;
+  if (prevNavEl) prevNavEl.style.display = hasPrev ? "grid" : "none";
+  if (nextNavEl) nextNavEl.style.display = hasNext ? "grid" : "none";
+  if (prevNavEl) prevNavEl.onclick = (e) => { e.stopPropagation(); navigatePreview(-1); };
+  if (nextNavEl) nextNavEl.onclick = (e) => { e.stopPropagation(); navigatePreview(1); };
 
-  const prevMedia = previewWrap.querySelector(".preview-media");
-  if (prevMedia) {
+  if (previewMedia) {
+    const previousItem = previewMedia.querySelector(".preview-item");
+    const nextItem = document.createElement("div");
+    nextItem.className = "preview-item";
+    nextItem.innerHTML = body || "";
+    previewMedia.appendChild(nextItem);
+
     requestAnimationFrame(() => {
-      prevMedia.classList.add("preview-media-ready");
+      nextItem.classList.add("preview-item-ready");
     });
+
+    if (previousItem) {
+      previousItem.classList.remove("preview-item-ready");
+      setTimeout(() => {
+        previousItem.remove();
+      }, 260);
+    }
   }
   previewInfo.innerHTML = `
     <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
@@ -1171,18 +1190,21 @@ function showPreviewModal(idx) {
     <button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 15 })} Download</button>
   `;
 
-  modal.classList.remove("preview-refreshing");
-  void modal.offsetWidth;
-  modal.classList.add("preview-refreshing");
-  setTimeout(() => modal.classList.remove("preview-refreshing"), 180);
-
   const previewImg = modal.querySelector(".preview-img");
   if (previewImg) {
-    const full = new Image();
-    full.onload = () => {
-      if (previewImg.isConnected) previewImg.src = full.src;
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      previewImg.style.opacity = "1";
     };
-    full.src = previewImg.dataset.full;
+    img.onerror = () => {
+      previewImg.style.opacity = "1";
+    };
+    img.src = previewImg.src;
+    previewImg.style.opacity = "0";
+    requestAnimationFrame(() => {
+      previewImg.style.opacity = "1";
+    });
   }
 }
 window.previewFile = previewFile;

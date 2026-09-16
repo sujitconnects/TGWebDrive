@@ -6,14 +6,28 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, "..");
+
+function ensureDir(dir, fallback) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    const safe = fallback || path.join(ROOT, "data");
+    fs.mkdirSync(safe, { recursive: true });
+    return safe;
+  }
+}
+
 // Allow pointing at a mounted persistent volume so the DB/session survive rebuilds & redeploys.
-export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
+const configuredDataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
+export const DATA_DIR = ensureDir(configuredDataDir, path.join(ROOT, "data"));
 export const PUBLIC_DIR = path.join(ROOT, "public");
 export const UPLOAD_TMP = path.join(DATA_DIR, "uploads");
 // Where in-flight upload temp files/parts are written. Defaults to a persistent
 // location under DATA_DIR (not /tmp) so container tmpfs limits and restarts
 // don't silently lose or corrupt uploads in progress.
-export const UPLOAD_TMP_DIR = process.env.UPLOAD_TMP_DIR ? path.resolve(process.env.UPLOAD_TMP_DIR) : UPLOAD_TMP;
+const configuredUploadTmpDir = process.env.UPLOAD_TMP_DIR ? path.resolve(process.env.UPLOAD_TMP_DIR) : UPLOAD_TMP;
+export const UPLOAD_TMP_DIR = ensureDir(configuredUploadTmpDir, path.join(DATA_DIR, "uploads-tmp"));
 
 for (const d of [DATA_DIR, UPLOAD_TMP, UPLOAD_TMP_DIR]) fs.mkdirSync(d, { recursive: true });
 
