@@ -1112,43 +1112,60 @@ document.addEventListener("keydown", (e) => {
 function showPreviewModal(idx) {
   const f = state.files[idx];
   if (!f) return;
-  $("#pmodal")?.remove();
   const url = `/api/files/${f.id}/raw?folder=${state.currentFolder}`;
   const thumbUrl = `/api/files/${f.id}/thumb?folder=${state.currentFolder}`;
   const previewUrl = `/api/files/${f.id}/preview?folder=${state.currentFolder}`;
   let body = "";
-  // Split files can't be seeked inline, so skip rich preview and offer download.
   if (f.multipart) body = "";
-  // Show the cached thumbnail instantly, then swap to the sharper (still downsized) preview once it loads.
   else if (f.kind === "image") body = `<img class="preview-img" src="${thumbUrl}" data-full="${previewUrl}" alt="" />`;
   else if (f.kind === "video") body = `<video src="${url}" controls autoplay></video>`;
   else if (f.kind === "audio") body = `<div class="audio-wrap">${fileIcon("audio", 56)}<audio src="${url}" controls autoplay></audio></div>`;
   else if (f.kind === "pdf") body = `<iframe class="pdf" src="${url}"></iframe>`;
   if (!body)
-    body = `<div class="no-prev">${fileIcon(f.multipart ? "archive" : f.kind, 56)}<div class="np-msg">${f.multipart ? `Split file · ${f.partsCount} parts` : "No preview available"}</div><div class="np-hint" style="color:var(--muted);font-size:12px;margin-bottom:12px">Downloads reassemble all parts into one file.</div><button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 16 })} Download</button></div>`;
+    body = `<div class="no-prev">${fileIcon(f.multipart ? "archive" : f.kind, 56)}<div class="np-msg">${f.multipart ? `Split file · ${f.partsCount} parts` : "No preview available"}</div><div class="np-hint">Downloads reassemble all parts into one file.</div><button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 16 })} Download</button></div>`;
+
   window.__pf = f;
   const hasPrev = idx > 0;
   const hasNext = idx < state.files.length - 1;
   const navBtn = (dir) =>
     `<button type="button" class="preview-nav ${dir}" onclick="event.stopPropagation();navigatePreview(${dir === "prev" ? -1 : 1})" aria-label="${dir === "prev" ? "Previous file" : "Next file"}">${icon(dir === "prev" ? "chevronLeft" : "chevronRight", { size: 22 })}</button>`;
   const capBtn = `<button class="btn-2" onclick="renameModal(window.__pf)">${icon("pencil", { size: 15 })} Rename</button>`;
-  const modal = el(`<div class="modal-bg" id="pmodal">
-    <div class="modal wide">
-      <div class="head"><div class="t">${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}</div>
-        <button class="icon-btn" onclick="document.getElementById('pmodal').remove()">${icon("x", { size: 18 })}</button></div>
-      <div class="preview-wrap">${hasPrev ? navBtn("prev") : ""}${body}${hasNext ? navBtn("next") : ""}</div>
-      <div class="preview-info">
-        <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
-        <div class="spacer"></div>
-        ${capBtn}
-        ${state.user?.isAdmin ? `<button class="btn-2" onclick="shareModal(window.__pf)">${icon("share", { size: 15 })} Share</button>` : ""}
-        <button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 15 })} Download</button>
-      </div>
-    </div></div>`);
-  modal.onclick = (e) => {
-    if (e.target === modal) modal.remove();
-  };
-  document.body.appendChild(modal);
+
+  let modal = document.getElementById("pmodal");
+  if (!modal) {
+    modal = el(`<div class="modal-bg" id="pmodal">
+      <div class="modal wide">
+        <div class="head"><div class="t">${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}</div>
+          <button class="icon-btn preview-close" type="button" aria-label="Close preview">${icon("x", { size: 18 })}</button></div>
+        <div class="preview-wrap"></div>
+        <div class="preview-info"></div>
+      </div></div>`);
+    modal.onclick = (e) => {
+      if (e.target === modal) modal.remove();
+    };
+    modal.querySelector(".preview-close").onclick = () => modal.remove();
+    document.body.appendChild(modal);
+  }
+
+  const title = modal.querySelector(".head .t");
+  const previewWrap = modal.querySelector(".preview-wrap");
+  const previewInfo = modal.querySelector(".preview-info");
+
+  title.innerHTML = `${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}`;
+  previewWrap.innerHTML = `${hasPrev ? navBtn("prev") : ""}${body}${hasNext ? navBtn("next") : ""}`;
+  previewInfo.innerHTML = `
+    <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
+    <div class="spacer"></div>
+    ${capBtn}
+    ${state.user?.isAdmin ? `<button class="btn-2" onclick="shareModal(window.__pf)">${icon("share", { size: 15 })} Share</button>` : ""}
+    <button class="primary" onclick="downloadFile(window.__pf)">${icon("download", { size: 15 })} Download</button>
+  `;
+
+  modal.classList.remove("preview-refreshing");
+  void modal.offsetWidth;
+  modal.classList.add("preview-refreshing");
+  setTimeout(() => modal.classList.remove("preview-refreshing"), 180);
+
   const previewImg = modal.querySelector(".preview-img");
   if (previewImg) {
     const full = new Image();
