@@ -44,7 +44,25 @@ const PERMANENT_MESSAGE_PATTERNS = [
 ];
 
 // Known-transient Telegram/network conditions worth retrying.
-const TRANSIENT_MESSAGE_PATTERNS = [/^TIMEOUT/i, /^INTERNAL/i, /^-?50\d(_|$)/, /^-?503/, /disconnect/i, /not connected/i, /^CONNECTION/i, /timed? ?out/i];
+const TRANSIENT_MESSAGE_PATTERNS = [
+  /^TIMEOUT/i,
+  /^INTERNAL/i,
+  /^-?50\d(_|$)/,
+  /^-?503/,
+  /disconnect/i,
+  /connection closed/i,
+  /connection reset/i,
+  /reset by peer/i,
+  /socket closed/i,
+  /unexpected.*close/i,
+  /not connected/i,
+  /^CONNECTION/i,
+  /timed? ?out/i,
+  /closed unexpectedly/i,
+  /broken pipe/i,
+  /read econnreset/i,
+  /econnreset/i,
+];
 
 // Whether a Telegram/network error is worth retrying. FLOOD_WAIT is handled
 // separately by the caller (it's "retryable" but on its own timer, not backoff).

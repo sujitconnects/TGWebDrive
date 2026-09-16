@@ -58,6 +58,12 @@ describe('isRetryableTelegramError', () => {
     assert.equal(isRetryableTelegramError(rpcError('socket disconnected')), true);
   });
 
+  test('treats dropped socket / reset / closed-connection errors as retryable', () => {
+    assert.equal(isRetryableTelegramError(rpcError('Connection closed')), true);
+    assert.equal(isRetryableTelegramError(rpcError('Connection reset by peer')), true);
+    assert.equal(isRetryableTelegramError(rpcError('socket closed unexpectedly')), true);
+  });
+
   test('a FLOOD_WAIT error is considered retryable (handled on its own timer)', () => {
     assert.equal(isRetryableTelegramError(rpcError('FLOOD_WAIT_5')), true);
   });

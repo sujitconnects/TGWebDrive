@@ -1152,7 +1152,17 @@ function showPreviewModal(idx) {
   const previewInfo = modal.querySelector(".preview-info");
 
   title.innerHTML = `${fileIcon(f.kind, 18)} ${esc(f.caption || f.name)}`;
-  previewWrap.innerHTML = `${hasPrev ? navBtn("prev") : ""}${body}${hasNext ? navBtn("next") : ""}`;
+  const mediaBody = body ? `<div class="preview-media">${body}</div>` : "";
+  const prevNav = hasPrev ? navBtn("prev") : "";
+  const nextNav = hasNext ? navBtn("next") : "";
+  previewWrap.innerHTML = `${prevNav}${mediaBody}${nextNav}`;
+
+  const prevMedia = previewWrap.querySelector(".preview-media");
+  if (prevMedia) {
+    requestAnimationFrame(() => {
+      prevMedia.classList.add("preview-media-ready");
+    });
+  }
   previewInfo.innerHTML = `
     <div class="pi-main"><div class="nm">${esc(f.name)}</div><div class="sz">${fmtSize(f.size)} · ${esc(f.ext || "")}</div></div>
     <div class="spacer"></div>
