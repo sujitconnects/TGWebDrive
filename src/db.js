@@ -134,6 +134,37 @@ export async function initDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multipart_peer ON multipart_files(account_id, peer_json);
+
+    CREATE TABLE IF NOT EXISTS upload_jobs (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL, -- null for API-key-initiated uploads
+      api_key_id TEXT REFERENCES api_keys(id) ON DELETE SET NULL,
+      folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL, -- for display only; peer_json is authoritative
+      peer_json TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime TEXT,
+      caption TEXT,
+      force_document INTEGER NOT NULL DEFAULT 1,
+      total_bytes BIGINT,
+      received_bytes BIGINT NOT NULL DEFAULT 0,
+      uploaded_bytes BIGINT NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'queued', -- queued|uploading|retrying|completed|failed|cancelled
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      msg_id INTEGER,
+      multipart_id TEXT,
+      tmp_path TEXT, -- server-only; never sent to clients
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      started_at BIGINT,
+      completed_at BIGINT,
+      cancelled_at BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_upload_jobs_account ON upload_jobs(account_id);
+    CREATE INDEX IF NOT EXISTS idx_upload_jobs_user ON upload_jobs(user_id);
+    CREATE INDEX IF NOT EXISTS idx_upload_jobs_status ON upload_jobs(status);
   `);
 
   // Migration: folder/multipart shares have no single message, so msg_id must be nullable.
@@ -274,6 +305,32 @@ export const stmt = {
   deleteSession: (sid) => query(`DELETE FROM sessions WHERE sid = $1`, [sid]),
   deleteExpiredSessions: (ts) => query(`DELETE FROM sessions WHERE expires_at < $1`, [ts]),
   deleteSessionsByUser: (userId) => query(`DELETE FROM sessions WHERE user_id = $1`, [userId]),
+
+  addUploadJob: (j) =>
+    query(
+      `INSERT INTO upload_jobs (id,account_id,user_id,api_key_id,folder_id,peer_json,file_name,mime,caption,force_document,total_bytes,status,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12,$12)`,
+      [j.id, j.account_id, j.user_id ?? null, j.api_key_id ?? null, j.folder_id ?? null, j.peer_json, j.file_name, j.mime ?? null, j.caption ?? null, j.force_document ? 1 : 0, j.total_bytes ?? null, j.created_at]
+    ),
+  getUploadJob: (id) => one(`SELECT * FROM upload_jobs WHERE id = $1`, [id]),
+  // Admins see every job for the currently selected Telegram account; regular
+  // users only ever see their own — API-key-initiated jobs (user_id IS NULL)
+  // are only visible to admins.
+  listUploadJobsForAccount: (accountId, { userId, isAdmin }) =>
+    isAdmin
+      ? query(`SELECT * FROM upload_jobs WHERE account_id = $1 ORDER BY created_at DESC LIMIT 200`, [accountId])
+      : query(`SELECT * FROM upload_jobs WHERE account_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT 200`, [accountId, userId]),
+  listStaleUploadJobs: () => query(`SELECT * FROM upload_jobs WHERE status IN ('queued','uploading','retrying')`),
+  markUploadJobStarted: (id, tmpPath, ts) => query(`UPDATE upload_jobs SET status = 'uploading', tmp_path = $1, started_at = $2, updated_at = $2 WHERE id = $3`, [tmpPath, ts, id]),
+  updateUploadJobProgress: (id, { receivedBytes, uploadedBytes }, ts) =>
+    query(`UPDATE upload_jobs SET received_bytes = $1, uploaded_bytes = $2, updated_at = $3 WHERE id = $4`, [receivedBytes ?? 0, uploadedBytes ?? 0, ts, id]),
+  markUploadJobRetrying: (id, retryCount, lastError, ts) => query(`UPDATE upload_jobs SET status = 'retrying', retry_count = $1, last_error = $2, updated_at = $3 WHERE id = $4`, [retryCount, lastError, ts, id]),
+  markUploadJobCompleted: (id, { msgId, multipartId }, ts) =>
+    query(`UPDATE upload_jobs SET status = 'completed', msg_id = $1, multipart_id = $2, completed_at = $3, updated_at = $3, last_error = NULL WHERE id = $4`, [msgId ?? null, multipartId ?? null, ts, id]),
+  markUploadJobFailed: (id, lastError, ts) => query(`UPDATE upload_jobs SET status = 'failed', last_error = $1, updated_at = $2 WHERE id = $3`, [lastError, ts, id]),
+  markUploadJobCancelled: (id, ts) => query(`UPDATE upload_jobs SET status = 'cancelled', cancelled_at = $1, updated_at = $1 WHERE id = $2 AND status IN ('queued','uploading','retrying')`, [ts, id]),
+  deleteUploadJob: (id) => query(`DELETE FROM upload_jobs WHERE id = $1`, [id]),
+  deleteOldUploadJobs: (cutoffTs) => query(`DELETE FROM upload_jobs WHERE status IN ('completed','failed','cancelled') AND updated_at < $1 RETURNING id`, [cutoffTs]),
 };
 
 export default pool;

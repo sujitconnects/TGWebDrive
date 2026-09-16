@@ -5,6 +5,8 @@ import mime from "mime-types";
 import { fmtBytes, classify, extOf } from "../util.js";
 import { HttpError } from "./manager.js";
 import { generateThumb, thumbCachePath } from "../thumb.js";
+import { config } from "../config.js";
+import { withTelegramRetry, FloodWaitExceededError } from "./retry.js";
 
 /* ---------- peers ---------- */
 
@@ -180,30 +182,46 @@ export async function getOne(client, peer, id) {
 
 /* ---------- upload ---------- */
 
-export async function uploadFile(client, peer, { filePath, fileName, fileSize, caption, forceDocument, onProgress, thumb }) {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      if (!client.connected) await client.connect();
-      return await client.sendFile(peer, {
-        file: filePath,
-        fileName,
-        fileSize,
-        caption: caption || "",
-        forceDocument: !!forceDocument,
-        supportsStreaming: true,
-        thumb,
-        workers: 1,
-        progressCallback: onProgress,
-      });
-    } catch (error) {
-      lastError = error;
-      if (attempt === 2) throw error;
-      try { await client.disconnect(); } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+export async function uploadFile(client, peer, { filePath, fileName, fileSize, caption, forceDocument, onProgress, thumb, shouldAbort }) {
+  try {
+    return await withTelegramRetry(
+      async () => {
+        if (!client.connected) await client.connect();
+        return await client.sendFile(peer, {
+          file: filePath,
+          fileName,
+          fileSize,
+          caption: caption || "",
+          forceDocument: !!forceDocument,
+          supportsStreaming: true,
+          thumb,
+          workers: 1,
+          progressCallback: onProgress,
+        });
+      },
+      {
+        maxAttempts: config.telegramUploadMaxAttempts,
+        baseDelayMs: config.telegramUploadRetryBaseMs,
+        maxDelayMs: config.telegramUploadRetryMaxMs,
+        maxFloodWaitSeconds: config.telegramUploadMaxFloodWaitSeconds,
+        shouldAbort,
+        onRetry: async ({ attempt, error, delayMs, reason }) => {
+          // Never log the file path/name or any peer/session data — just enough to diagnose retries.
+          console.warn(`[tg-upload] attempt ${attempt} failed (${reason}): ${error?.errorMessage || error?.message || "unknown error"} — retrying in ${delayMs}ms`);
+          if (reason === "transient") {
+            try {
+              await client.disconnect();
+            } catch {}
+          }
+        },
+      }
+    );
+  } catch (e) {
+    if (e instanceof FloodWaitExceededError) {
+      throw new HttpError(429, `Telegram is rate-limiting uploads and asked to wait ${e.seconds}s, which exceeds the configured maximum of ${e.maxSeconds}s. Please try again later.`);
     }
+    throw e;
   }
-  throw lastError;
 }
 
 /* ---------- rename (caption) / delete ---------- */

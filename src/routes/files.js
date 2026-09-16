@@ -25,6 +25,8 @@ import {
 } from "../tg/operations.js";
 import { publish, subscribe, finish, fail } from "../jobs.js";
 import { uid, safeFilename, checkDeclaredUploadSize, wouldExceedUploadLimit, cleanupPath, fmtBytes } from "../util.js";
+import { isUploadJobCancelRequested, clearUploadJobCancel } from "../uploadJobCancel.js";
+import { shouldPersistUploadProgress } from "../uploadJobPolicy.js";
 import { generateThumb, IMAGE_RE, thumbCachePath, generatePreview, previewCachePath } from "../thumb.js";
 import { hasDuplicateNameSize, findDuplicateItems } from "../duplicate.js";
 
@@ -152,6 +154,7 @@ files.get("/files/upload/progress", requireAppAuth, (req, res) => {
 /* --------- upload --------- */
 files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, next) => {
   const job = String(req.headers["x-job"] || "");
+  const dbJobId = uid();
   let tmp = "";
   let upDir = "";
   try {
@@ -166,6 +169,25 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
 
+    // Persist the job before any bytes are received/sent, so a crash mid-upload
+    // is always recoverable (see src/uploadJobRecovery.js for the startup sweep).
+    await stmt.addUploadJob({
+      id: dbJobId,
+      account_id: req.accountId,
+      user_id: req.user?.id || null,
+      folder_id: row.id,
+      peer_json: row.peer_json,
+      file_name: fileName,
+      mime: mime.lookup(fileName) || null,
+      caption,
+      force_document: forceDocument,
+      total_bytes: size || null,
+      created_at: Date.now(),
+    });
+    // Let the browser's existing SSE progress stream learn the persistent job's id
+    // as early as possible, so the upload-jobs panel can offer cancel immediately.
+    if (job) publish(job, { phase: "queued", jobId: dbJobId });
+
     const existing = await listAllFolderEntries(client, peer);
     const multipart = await stmt.listMultipart(req.accountId, row.peer_json);
     const allExisting = existing.concat(multipart.map((mp) => serializeMultipart(mp)));
@@ -176,12 +198,22 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     fs.mkdirSync(config.uploadTmpDir, { recursive: true });
     upDir = fs.mkdtempSync(path.join(config.uploadTmpDir, "tgd-up-"));
     tmp = `${upDir}/${fileName}`;
+    await stmt.markUploadJobStarted(dbJobId, tmp, Date.now());
     const out = fs.createWriteStream(tmp);
     let received = 0;
     let sizeExceeded = false;
+    let cancelled = false;
+    let lastPersist = 0;
     try {
       await new Promise((resolve, reject) => {
         const onData = (c) => {
+          if (isUploadJobCancelRequested(dbJobId)) {
+            cancelled = true;
+            req.removeListener("data", onData);
+            out.destroy(new Error("UPLOAD_CANCELLED"));
+            req.destroy(new Error("UPLOAD_CANCELLED"));
+            return;
+          }
           if (wouldExceedUploadLimit(received, c.length, config.maxUploadBytes)) {
             sizeExceeded = true;
             req.removeListener("data", onData);
@@ -191,6 +223,11 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
           }
           received += c.length;
           if (job && size) publish(job, { phase: "receiving", received, size, ratio: received / size });
+          const now = Date.now();
+          if (shouldPersistUploadProgress(lastPersist, now)) {
+            lastPersist = now;
+            stmt.updateUploadJobProgress(dbJobId, { receivedBytes: received, uploadedBytes: 0 }, now).catch(() => {});
+          }
         };
         req.on("data", onData);
         req.pipe(out);
@@ -200,12 +237,14 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
         req.on("aborted", () => reject(new Error("Client aborted upload")));
       });
     } catch (streamErr) {
+      if (cancelled || streamErr?.message === "UPLOAD_CANCELLED") throw new Error("UPLOAD_CANCELLED");
       if (sizeExceeded || streamErr?.message === "UPLOAD_SIZE_EXCEEDED") {
         throw new HttpError(413, `File exceeds the maximum allowed size of ${fmtBytes(config.maxUploadBytes)}`);
       }
       throw streamErr;
     }
 
+    let lastSendPersist = 0;
     if (job) publish(job, { phase: "sending", uploaded: 0, total: size, ratio: 0 });
     let thumbPath;
     if (IMAGE_RE.test(fileName)) {
@@ -241,6 +280,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
       let uploadedSoFar = 0;
       try {
         while (offset < size) {
+          if (isUploadJobCancelRequested(dbJobId)) throw new Error("UPLOAD_CANCELLED");
           const thisSize = Math.min(config.splitPartBytes, size - offset);
           // Name the temp part after the real file so Telegram stores it under a
           // recognisable name (not the temp basename "_part0").
@@ -253,17 +293,24 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
             fileSize: thisSize,
             caption: partIndex === 0 ? caption : "",
             forceDocument: true,
+            shouldAbort: () => isUploadJobCancelRequested(dbJobId),
             onProgress: (uploaded) => {
-              if (!job) return;
               const overall = uploadedSoFar + Number(uploaded);
-              publish(job, {
-                phase: "sending",
-                uploaded: String(overall),
-                total: String(size),
-                ratio: size ? overall / size : 0,
-                multipart: true,
-                part: partIndex + 1,
-              });
+              if (job) {
+                publish(job, {
+                  phase: "sending",
+                  uploaded: String(overall),
+                  total: String(size),
+                  ratio: size ? overall / size : 0,
+                  multipart: true,
+                  part: partIndex + 1,
+                });
+              }
+              const now = Date.now();
+              if (shouldPersistUploadProgress(lastSendPersist, now)) {
+                lastSendPersist = now;
+                stmt.updateUploadJobProgress(dbJobId, { receivedBytes: size, uploadedBytes: overall }, now).catch(() => {});
+              }
             },
           });
           await cleanupPath(partPath, { label: "upload-part-cleanup" });
@@ -290,6 +337,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
         await cleanupPath(upDir, { label: "upload-dir-cleanup" });
       }
       const file = serializeMultipart(await stmt.getMultipart(mpId));
+      await stmt.markUploadJobCompleted(dbJobId, { multipartId: mpId }, Date.now());
       if (job) finish(job, { id: file?.id, name: file?.name });
       return res.json({ ok: true, file });
     }
@@ -301,25 +349,45 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
       caption,
       forceDocument,
       thumb: thumbPath,
+      shouldAbort: () => isUploadJobCancelRequested(dbJobId),
       onProgress: (uploaded, total) => {
-        if (!job) return;
-        publish(job, {
-          phase: "sending",
-          uploaded: String(uploaded),
-          total: String(total),
-          ratio: total ? Number(uploaded) / Number(total) : 0,
-        });
+        if (job) {
+          publish(job, {
+            phase: "sending",
+            uploaded: String(uploaded),
+            total: String(total),
+            ratio: total ? Number(uploaded) / Number(total) : 0,
+          });
+        }
+        const now = Date.now();
+        if (shouldPersistUploadProgress(lastSendPersist, now)) {
+          lastSendPersist = now;
+          stmt.updateUploadJobProgress(dbJobId, { receivedBytes: size, uploadedBytes: Number(uploaded) || 0 }, now).catch(() => {});
+        }
       },
     });
     await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     const file = serializeMessage(sent);
+    await stmt.markUploadJobCompleted(dbJobId, { msgId: file?.id }, Date.now());
     if (job) finish(job, { id: file?.id, name: file?.name });
     res.json({ ok: true, file });
   } catch (e) {
     if (upDir) await cleanupPath(upDir, { label: "upload-dir-cleanup" });
     const aborted = e?.message === "Client aborted upload" || e?.code === "ERR_ABORTED";
-    if (job) fail(job, aborted ? new Error("Cancelled") : e);
-    if (aborted) return res.status(499).end(); // client went away — don't log a 500
+    const cancelled = e?.message === "UPLOAD_CANCELLED" || e?.name === "UploadCancelledError";
+    if (job) fail(job, aborted || cancelled ? new Error("Cancelled") : e);
+    // A concurrent call to the /cancel endpoint (or a previous finalization) may
+    // already have written a terminal status — never clobber that.
+    if (!cancelled) {
+      try {
+        const current = await stmt.getUploadJob(dbJobId);
+        if (current && current.status !== "cancelled") {
+          await stmt.markUploadJobFailed(dbJobId, aborted ? "Client disconnected during upload" : String(e?.message || e), Date.now());
+        }
+      } catch {}
+    }
+    clearUploadJobCancel(dbJobId);
+    if (aborted || cancelled) return res.status(499).end(); // client went away / cancelled — don't log a 500
     next(e);
   }
 });

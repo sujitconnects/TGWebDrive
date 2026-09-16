@@ -481,6 +481,7 @@ function renderApp() {
         <button class="icon-btn menu-btn" id="menuBtn" title="Menu">${icon("menu")}</button>
         <div class="searchbox">${icon("search", { size: 18, cls: "lead" })}<input class="search" id="search" placeholder="Search in drive…" /></div>
         <div class="spacer"></div>
+        <button class="icon-btn" id="uploadJobsBtn" title="Upload history">${icon("clock", { size: 19 })}</button>
         <button class="icon-btn" id="themeBtn" title="Toggle theme">${icon(theme.current === "dark" ? "sun" : "moon", { size: 19 })}</button>
         <button class="gd-avatar" id="avatarBtn" title="${esc(state.user?.username || "")}">${esc((state.user?.username || "?").charAt(0).toUpperCase())}</button>
       </div>
@@ -496,10 +497,13 @@ function renderApp() {
     window.__st = setTimeout(() => loadFiles(true), 350);
   };
   $("#themeBtn").onclick = () => setTheme(theme.current === "dark" ? "light" : "dark");
+  $("#uploadJobsBtn").onclick = () => openUploadJobsPanel();
   $("#avatarBtn").onclick = (e) => openAvatarMenu(e.currentTarget);
   $("#newBtn").onclick = (e) => openNewMenu(e.currentTarget);
   mountUploader();
   renderSidebar();
+  loadUploadJobs({ silent: true });
+  startUploadJobsHeartbeat();
 }
 function openNewMenu(anchor) {
   const inFolder = !!state.currentFolder;
@@ -1776,6 +1780,10 @@ function uploadTask(t, signal) {
       try {
         const d = JSON.parse(e.data);
         if (d.error) return finish(new Error(d.error));
+        if (d.jobId && !t.dbJobId) {
+          t.dbJobId = d.jobId;
+          onUploadJobIdKnown(t);
+        }
         if (d.phase === "receiving") {
           t.stage = "receiving";
           t.uploaded = Number(d.received) || t.uploaded;
@@ -1864,6 +1872,10 @@ function onSwUploadStatus(e) {
       es.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data);
+          if (d.jobId && !t.dbJobId) {
+            t.dbJobId = d.jobId;
+            onUploadJobIdKnown(t);
+          }
           if (d.phase === "receiving") { t.stage = "receiving"; t.uploaded = Number(d.received) || t.uploaded; t.total = Number(d.size) || t.total; }
           else if (d.phase === "sending") { t.stage = "sending"; t.uploaded = Number(d.uploaded) || 0; t.total = Number(d.total) || t.total; t.part = d.multipart ? d.part : null; }
           scheduleUpRender();
@@ -1886,6 +1898,223 @@ function onSwUploadStatus(e) {
     if (t._finish) t._finish(new Error(t.error));
     scheduleUpRender();
   }
+}
+
+/* ===================== persistent upload jobs panel =====================
+   Server-truth history of uploads (survives refresh, other tabs/devices, and
+   server restarts) backed by /api/files/upload/jobs — separate from the
+   in-memory `up` dock above, which still drives the live per-tab progress UI
+   exactly as before. Live updates here come from a lightweight periodic
+   refresh (a real reconnect-safe substitute for a per-job SSE stream, since
+   historical/other-tab jobs have no live EventSource to reuse). */
+const UJOBS_DISMISSED_KEY = "tg.dismissedUploadJobs";
+const UJOBS_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+function loadDismissedUploadJobs() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(UJOBS_DISMISSED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function saveDismissedUploadJobs() {
+  try {
+    localStorage.setItem(UJOBS_DISMISSED_KEY, JSON.stringify([...ujobs.dismissed]));
+  } catch {}
+}
+const ujobs = { open: false, items: [], loading: false, error: "", pending: new Set(), dismissed: loadDismissedUploadJobs(), modal: null, heartbeat: null };
+
+// Called once the browser's own SSE stream tells us the persistent job id for
+// an upload we started in this tab — lets the panel show/act on it immediately
+// instead of waiting for the next poll.
+function onUploadJobIdKnown() {
+  if (ujobs.open) loadUploadJobs({ silent: true });
+}
+
+function uploadJobsActiveCount() {
+  return ujobs.items.filter((j) => !UJOBS_TERMINAL.has(j.status) && !ujobs.dismissed.has(j.id)).length;
+}
+function refreshUploadJobsBadge() {
+  const btn = document.getElementById("uploadJobsBtn");
+  if (!btn) return;
+  const n = uploadJobsActiveCount();
+  let b = btn.querySelector(".ujobs-badge");
+  if (n > 0) {
+    if (!b) {
+      b = el(`<span class="ujobs-badge"></span>`);
+      btn.appendChild(b);
+    }
+    b.textContent = n > 9 ? "9+" : String(n);
+  } else if (b) {
+    b.remove();
+  }
+}
+
+async function loadUploadJobs({ silent = false } = {}) {
+  if (!silent) {
+    ujobs.loading = true;
+    if (ujobs.open) renderUploadJobsPanel();
+  }
+  try {
+    const r = await api("/api/files/upload/jobs");
+    ujobs.items = r.jobs || [];
+    ujobs.error = "";
+    // A retried job is active again — let it reappear even if it was dismissed before.
+    let changed = false;
+    for (const j of ujobs.items) {
+      if (!UJOBS_TERMINAL.has(j.status) && ujobs.dismissed.has(j.id)) {
+        ujobs.dismissed.delete(j.id);
+        changed = true;
+      }
+    }
+    if (changed) saveDismissedUploadJobs();
+  } catch (e) {
+    ujobs.error = e.message || "Couldn't load upload history";
+  } finally {
+    ujobs.loading = false;
+    refreshUploadJobsBadge();
+    if (ujobs.open) renderUploadJobsPanel();
+  }
+}
+window.loadUploadJobs = loadUploadJobs;
+
+// Single lightweight heartbeat for the whole app session: refreshes while the
+// panel is open (live progress) or while any job is still active (keeps the
+// badge honest even with the panel closed) — otherwise it's a no-op tick.
+function startUploadJobsHeartbeat() {
+  if (ujobs.heartbeat) return;
+  ujobs.heartbeat = setInterval(() => {
+    if (ujobs.open || ujobs.items.some((j) => !UJOBS_TERMINAL.has(j.status))) loadUploadJobs({ silent: true });
+  }, 4000);
+}
+
+function openUploadJobsPanel() {
+  ujobs.open = true;
+  renderUploadJobsPanel();
+  loadUploadJobs();
+}
+function closeUploadJobsPanel() {
+  ujobs.open = false;
+  if (ujobs.modal) {
+    ujobs.modal.remove();
+    ujobs.modal = null;
+  }
+}
+window.openUploadJobsPanel = openUploadJobsPanel;
+window.closeUploadJobsPanel = closeUploadJobsPanel;
+
+function ujobStatusLabel(j) {
+  if (j.status === "retrying") return `Retrying (attempt ${(j.retryCount || 0) + 1})`;
+  return { queued: "Queued", uploading: "Uploading", completed: "Completed", failed: "Failed", cancelled: "Cancelled" }[j.status] || j.status;
+}
+function ujobStatusIcon(j) {
+  if (j.status === "completed") return icon("check", { size: 14, cls: "ok-ic" });
+  if (j.status === "failed") return icon("alert", { size: 14, cls: "err-ic" });
+  if (j.status === "cancelled") return icon("x", { size: 14 });
+  return `<span class="upd-spinner"></span>`;
+}
+// Two-stage progress (receive then send), same weighting as the live dock.
+function ujobPct(j) {
+  if (j.status === "completed") return 100;
+  const total = Number(j.totalBytes) || 0;
+  if (!total) return 0;
+  const receiving = Math.min(1, (Number(j.receivedBytes) || 0) / total);
+  const sending = Math.min(1, (Number(j.uploadedBytes) || 0) / total);
+  const frac = j.uploadedBytes ? 0.5 + sending * 0.5 : receiving * 0.5;
+  return Math.round(frac * 100);
+}
+function ujobTime(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function ujobRow(j) {
+  const pct = ujobPct(j);
+  const pending = ujobs.pending.has(j.id);
+  const canCancel = ["queued", "uploading", "retrying"].includes(j.status);
+  const canRetry = j.status === "failed";
+  const actions = [];
+  if (canCancel) actions.push(`<button class="btn-2 ghost" type="button" data-ujob-action="cancel" data-id="${j.id}" ${pending ? "disabled" : ""}>${icon("x", { size: 13 })} Cancel</button>`);
+  if (canRetry) actions.push(`<button class="btn-2 ghost" type="button" data-ujob-action="retry" data-id="${j.id}" ${pending ? "disabled" : ""}>${icon("refresh", { size: 13 })} Retry</button>`);
+  if (UJOBS_TERMINAL.has(j.status)) actions.push(`<button class="btn-2 ghost" type="button" data-ujob-action="dismiss" data-id="${j.id}">${icon("x", { size: 13 })} Dismiss</button>`);
+  return `<div class="ujob-row ujob-${j.status}" data-ujob-row="${j.id}">
+    <div class="ujob-ic">${ujobStatusIcon(j)}</div>
+    <div class="ujob-main">
+      <div class="ujob-nm" title="${esc(j.fileName)}">${esc(j.fileName)}</div>
+      <div class="ujob-meta">${esc(j.mime || "unknown type")} · ${j.totalBytes != null ? fmtSize(j.totalBytes) : "size unknown"} · ${esc(ujobStatusLabel(j))}${j.retryCount ? ` · ${j.retryCount} retr${j.retryCount === 1 ? "y" : "ies"}` : ""}</div>
+      ${!UJOBS_TERMINAL.has(j.status) ? `<div class="ujob-bar"><div style="width:${pct}%"></div></div>` : ""}
+      ${j.status === "failed" && j.lastError ? `<div class="ujob-err">${esc(j.lastError)}</div>` : ""}
+      <div class="ujob-times">Started ${ujobTime(j.createdAt)} · Updated ${ujobTime(j.updatedAt)}</div>
+    </div>
+    <div class="ujob-act">${actions.join("")}</div>
+  </div>`;
+}
+function renderUploadJobsPanel() {
+  if (!ujobs.modal) {
+    ujobs.modal = el(`<div class="modal-bg" id="ujobsModal"></div>`);
+    ujobs.modal.onclick = (e) => {
+      if (e.target === ujobs.modal) closeUploadJobsPanel();
+    };
+    ujobs.modal.addEventListener("click", (e) => {
+      const t = e.target.closest("[data-ujob-action]");
+      if (!t) return;
+      const { id } = t.dataset;
+      const action = t.dataset.ujobAction;
+      if (action === "cancel") cancelUploadJob(id);
+      else if (action === "retry") retryUploadJob(id);
+      else if (action === "dismiss") dismissUploadJob(id);
+    });
+    document.body.appendChild(ujobs.modal);
+  }
+  const visible = ujobs.items.filter((j) => !(UJOBS_TERMINAL.has(j.status) && ujobs.dismissed.has(j.id)));
+  let body;
+  if (ujobs.loading && !ujobs.items.length) {
+    body = `<div class="center-load"><div class="spinner"></div></div>`;
+  } else if (ujobs.error) {
+    body = emptyHtml(esc(ujobs.error), "alert", `<button class="primary" onclick="loadUploadJobs()">${icon("refresh", { size: 16 })} Retry</button>`);
+  } else if (!visible.length) {
+    body = emptyHtml("No uploads yet", "uploadCloud");
+  } else {
+    body = `<div class="ujobs-list">${visible.map(ujobRow).join("")}</div>`;
+  }
+  ujobs.modal.innerHTML = `<div class="modal wide ujobs-modal">
+    <div class="head"><div class="t">${icon("clock", { size: 18 })} Upload history</div>
+      <button class="icon-btn" onclick="closeUploadJobsPanel()">${icon("x", { size: 18 })}</button></div>
+    <div class="ujobs-body">${body}</div>
+  </div>`;
+}
+async function cancelUploadJob(id) {
+  if (ujobs.pending.has(id)) return;
+  ujobs.pending.add(id);
+  renderUploadJobsPanel();
+  try {
+    await api(`/api/files/upload/jobs/${id}/cancel`, { method: "POST" });
+    toast("Upload cancelled");
+  } catch (e) {
+    uiAlert(e.message, { title: "Couldn't cancel upload" });
+  } finally {
+    ujobs.pending.delete(id);
+    await loadUploadJobs({ silent: true });
+  }
+}
+async function retryUploadJob(id) {
+  if (ujobs.pending.has(id)) return;
+  ujobs.pending.add(id);
+  renderUploadJobsPanel();
+  try {
+    await api(`/api/files/upload/jobs/${id}/retry`, { method: "POST" });
+    toast("Upload retried");
+    maybeRefreshCurrentFolder(state.currentFolder);
+  } catch (e) {
+    uiAlert(e.message, { title: "Couldn't retry upload" });
+  } finally {
+    ujobs.pending.delete(id);
+    await loadUploadJobs({ silent: true });
+  }
+}
+function dismissUploadJob(id) {
+  ujobs.dismissed.add(id);
+  saveDismissedUploadJobs();
+  refreshUploadJobsBadge();
+  renderUploadJobsPanel();
 }
 
 /* ---- subfolder creation + folder tree refresh ---- */

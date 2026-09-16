@@ -54,6 +54,14 @@ export const config = {
   // Keep large uploads in smaller Telegram transfers so a connection reset does
   // not lose an entire multi-gigabyte upload. Parts reassemble on download.
   splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || 512 * 1024 * 1024,
+  // Retry tuning for transient Telegram/network failures during upload (see src/tg/retry.js).
+  telegramUploadMaxAttempts: Number(process.env.TELEGRAM_UPLOAD_MAX_ATTEMPTS) || 5,
+  telegramUploadRetryBaseMs: Number(process.env.TELEGRAM_UPLOAD_RETRY_BASE_MS) || 1000,
+  telegramUploadRetryMaxMs: Number(process.env.TELEGRAM_UPLOAD_RETRY_MAX_MS) || 30000,
+  telegramUploadMaxFloodWaitSeconds: Number(process.env.TELEGRAM_UPLOAD_MAX_FLOOD_WAIT_SECONDS) || 300,
+  // How long finished (completed/failed/cancelled) upload_jobs rows are kept before
+  // the startup sweep deletes them — bounded cleanup, no background worker needed.
+  uploadJobRetentionDays: Number(process.env.UPLOAD_JOB_RETENTION_DAYS) || 30,
   apiPresets: (process.env.API_PRESETS || "")
     .split(",")
     .map((s) => s.trim())

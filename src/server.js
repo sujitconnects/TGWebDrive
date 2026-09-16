@@ -7,6 +7,7 @@ import { config, PUBLIC_DIR } from "./config.js";
 import { initDb } from "./db.js";
 import { HttpError } from "./tg/manager.js";
 import { pruneStaleDirs } from "./util.js";
+import { recoverStaleUploadJobs, pruneOldUploadJobs } from "./uploadJobRecovery.js";
 import { auth } from "./routes/auth.js";
 import { folders } from "./routes/folders.js";
 import { files } from "./routes/files.js";
@@ -14,6 +15,7 @@ import { share, pubBin } from "./routes/share.js";
 import { stats } from "./routes/stats.js";
 import { api, keys } from "./routes/api.js";
 import { branding } from "./routes/branding.js";
+import { uploadJobs } from "./routes/uploadJobs.js";
 
 await initDb();
 
@@ -26,6 +28,17 @@ try {
   if (removed.length) console.log(`[startup] removed ${removed.length} abandoned upload temp dir(s)`);
 } catch (e) {
   console.error("[startup] upload temp dir sweep failed:", e?.message || e);
+}
+
+// Any upload_jobs row still queued/uploading/retrying at startup was interrupted
+// by this restart (single-process deployment — nothing else could be running it).
+try {
+  const recovered = await recoverStaleUploadJobs();
+  if (recovered) console.log(`[startup] marked ${recovered} interrupted upload job(s) as failed`);
+  const pruned = await pruneOldUploadJobs(config.uploadJobRetentionDays * 24 * 3600 * 1000);
+  if (pruned) console.log(`[startup] removed ${pruned} old finished upload job row(s)`);
+} catch (e) {
+  console.error("[startup] upload job recovery/cleanup failed:", e?.message || e);
 }
 
 const app = express();
@@ -62,7 +75,7 @@ app.use((req, res, next) => {
 
 app.get("/api/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-app.use("/api", auth, folders, files, share, stats, api, keys, branding);
+app.use("/api", auth, folders, files, share, stats, api, keys, branding, uploadJobs);
 
 // public share binary streams (raw / thumb / zip) — must be before SPA fallback
 app.use(pubBin);
